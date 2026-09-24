@@ -1,12 +1,14 @@
 name: Build KAGE merged Nori APK
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
