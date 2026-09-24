@@ -1,0 +1,631 @@
+  if(!sample) return;
+  $('#plan-btn').disabled=true; $('#plan-btn').textContent='Thinking…';
+  const prompt = "Plan a student's next study session in 3-5 short prioritized bullets. Subjects: "+(profile.subjects||'not specified')+". "+
+    (weakAreas.length ? "Weak spots to prioritize: "+weakAreas.map(w=>w.topic).join(', ')+". " : "")+
+    "Current streak: "+(progress.streak||0)+" days. Keep it concrete and short, plain text.";
+  try{
+    const r = await sample(prompt, {modelTier:'default'});
+    $('#plan-text').style.display='block'; $('#plan-text').textContent=r.text;
+  }catch(e){ $('#plan-text').style.display='block'; $('#plan-text').textContent="Couldn't generate that right now — try again shortly."; }
+  $('#plan-btn').disabled=false; $('#plan-btn').textContent='Plan my next session';
+});
+
+// ---------- study notes ----------
+function renderStudyNotes(){
+  const wrap=$('#notes-list'); wrap.innerHTML='';
+  $('#notes-empty').style.display = studyNotes.length ? 'none':'block';
+  studyNotes.forEach((n,i)=>{
+    const row=document.createElement('div'); row.className='card-list-item';
+    row.innerHTML='<span>['+n.subject+'] '+n.text.slice(0,60)+(n.text.length>60?'…':'')+'</span>';
+    const del=document.createElement('button'); del.className='btn ghost small'; del.textContent='✕';
+    del.addEventListener('click', ()=>{ studyNotes.splice(i,1); persistProfile(); renderStudyNotes(); });
+    row.appendChild(del); wrap.appendChild(row);
+  });
+}
+$('#note-add-btn').addEventListener('click', ()=>{
+  const s=$('#note-subject').value.trim(), t=$('#note-text').value.trim();
+  if(!t) return;
+  studyNotes.push({subject:s||'General', text:t, addedAt:Date.now()});
+  $('#note-subject').value=''; $('#note-text').value='';
+  persistProfile(); renderStudyNotes();
+});
+
+// ---------- recovery ladder ----------
+// Three domains (focus / consistency / practice), each a rolling 7-day window of
+// logged events with a reason. Degree 1-3 reflects frequency only — it NEVER removes
+// anything or locks a feature. Every degree step is more support, not less freedom:
+// deg1 = logged quietly. deg2 = Anchor sends one caring check-in, no blame, asks what's
+// going on. deg3 = Anchor offers to shrink the commitment and gently suggests a real
+// person (parent/teacher/counselor) if it keeps being this hard. Context (the reason
+// picked) always shapes the tone — "wasn't feeling well" never escalates the same way
+// "keep getting distracted" does.
+const LADDER_DOMAINS = {focus:'staying off distractions during a focus block', consistency:'showing up day to day', practice:'sticking with drills/flashcards without shutting down'};
+
+// Rule: no escalation for causes outside reasonable control. A reason of illness,
+// exhaustion, or an external event PROTECTS that event from counting toward degree —
+// it's logged for your own visibility, but it can't push the ladder up. This mirrors
+// "no punishment for recovery": being sick or wiped out is never treated as a failure.
+const PROTECTED_REASON_PATTERN = /not feeling well|sick|ill\b|exhaust|burnt out|burnout|family|emergency/i;
+function isProtectedReason(reason){ return !!(reason && PROTECTED_REASON_PATTERN.test(reason)); }
+
+function ladderWindowEvents(domain){
+  const cutoff = Date.now()-7*86400000;
+  ladder[domain].events = (ladder[domain].events||[]).filter(e=>e.at>cutoff);
+  return ladder[domain].events;
+}
+function ladderCountedEvents(domain){
+  return ladderWindowEvents(domain).filter(e=>!e.protected);
+}
+function ladderDegree(domain){
+  const n = ladderCountedEvents(domain).length;
+  // 5 degrees — frequency of COUNTED (non-protected) events only, never a judgment call:
+  // 0 none · 1 one-off · 2 a pattern starting · 3 worth naming directly ·
+  // 4 firm, structural change suggested · 5 suggest a real person, gently
+  if(n===0) return 0;
+  if(n===1) return 1;
+  if(n===2) return 2;
+  if(n===3) return 3;
+  if(n<=5) return 4;
+  return 5;
+}
+function humanOverrideActive(){ return ladder.overrideUntil && Date.now()<ladder.overrideUntil; }
+async function logLadderEvent(domain, reason){
+  ladder[domain].events = ladder[domain].events||[];
+  const protectedEvent = isProtectedReason(reason);
+  ladder[domain].events.push({reason, at:Date.now(), protected:protectedEvent});
+  persistProfile(); renderLadder();
+
+  if(protectedEvent){
+    pushBotStatic("Noted — that's not on you. Nothing here escalates for being sick, exhausted, or dealing with something real. Take care of that first.");
+    return;
+  }
+  if(humanOverrideActive()){ renderLadder(); return; } // paused: logged, but no check-in while override is active
+
+  const events = ladderWindowEvents(domain);
+  const newDeg = ladderDegree(domain);
+  const prevDeg = ladder[domain].lastDegree||0;
+  ladder[domain].lastDegree = newDeg;
+  persistProfile();
+  if(newDeg>=2 && newDeg>prevDeg) await anchorCheckIn(domain, newDeg, events);
+}
+
+// Human Override: say it in chat and the ladder pauses escalation for 24h while
+// Anchor reassesses instead of assuming. It can't be used to erase or falsify what
+// already happened — the history stays — only to pause what happens NEXT.
+async function triggerHumanOverride(userText){
+  ladder.overrideUntil = Date.now()+24*3600*1000;
+  persistProfile(); renderLadder();
+  if(!sample){ pushBotStatic("Override noted — I'll hold off on any check-ins for a day while we sort this out."); return; }
+  const prompt = "You are Anchor. The user just invoked Human Override, which pauses the recovery ladder's escalation for 24 hours — it does not erase their history, just pauses what happens next. "+
+    "Their message: \""+userText+"\". Acknowledge the override plainly (don't be dramatic about it), then ask ONE genuine question to understand what's actually going on — specifically try to tell apart 'I can't right now' from 'I don't want to right now', without assuming which it is. Warm, short, 2-4 sentences.";
+  try{
+    const r = await sample(prompt, {modelTier:'default'});
+    pushBotStatic(r.text);
+    const bl=document.createElement('div'); bl.className='brainline active-brain'; bl.textContent='— Anchor · Human override acknowledged'; log.appendChild(bl); scrollLog();
+    chatHistory.push({role:'assistant', content:r.text}); persistChat();
+  }catch(e){
+    pushBotStatic("Override noted — I'll hold off on any check-ins for a day. What's actually going on?");
+  }
+}
+const ANCHOR_DEGREE_TONE = {
+  2: "Check in with genuine curiosity, not blame — ask what's going on, don't assume.",
+  3: "Name the pattern plainly and directly — no hedging, no over-softening. Give ONE concrete, practical instruction for right now if they sound tired or burnt out (e.g. 'go wash your face, get some water, take a 10-minute break, then come back') rather than just being agreeable. Still warm, but this is a moment to be a little more firm — friendly, not a pushover.",
+  4: "Be direct and structural: propose a specific, smaller change to how they're doing this (a shorter block, a set time of day, one less thing at once). State it plainly, not as a tentative suggestion buried in softness. Firm and caring at once.",
+  5: "This has repeated enough that it deserves honesty: say plainly that this keeps happening, and gently but clearly suggest they talk to a real person they trust (a parent, teacher, or counselor) — not as a last resort or a red flag, just as the right next step when a pattern outlasts what an app can help with. Still warm, still on their side, but don't soften this into disappearing."
+};
+async function anchorCheckIn(domain, degree, events){
+  const reasons = events.map(e=>e.reason).filter(Boolean);
+  const otherHot = Object.keys(ladder).filter(d=>d!==domain && ladderDegree(d)>=2);
+  let text;
+  if(sample){
+    const prompt = "You are Anchor, a recovery coach inside a study app. Your style is warm but not a pushover: friendly, never shaming, but you give real, practical, sometimes blunt guidance instead of endless validation — the kind of person who says 'go wash your face and come back' to someone who's just tired, instead of just agreeing that today is hard. "+
+      "They've had a rough patch with "+LADDER_DOMAINS[domain]+" (degree "+degree+" of 5, based on frequency only, not judgment). "+
+      "Reasons they gave recently: "+(reasons.length?reasons.join(', '):'none given')+". "+
+      (otherHot.length ? "Other areas also under strain right now: "+otherHot.map(d=>LADDER_DOMAINS[d]).join(', ')+". Acknowledge the bigger picture briefly instead of piling on separately. " : "")+
+      (ANCHOR_DEGREE_TONE[degree]||ANCHOR_DEGREE_TONE[2])+
+      " Write ONE message (3-5 sentences max), speaking directly to them.";
+    try{ const r = await sample(prompt, {modelTier:'default'}); text=r.text; }catch(e){ text=null; }
+  }
+  if(!text) text = "Hey — I've noticed "+LADDER_DOMAINS[domain]+" has been rough lately. Let's figure out a smaller, more doable version of it — what's actually getting in the way?";
+  pushBotStatic(text);
+  const bl=document.createElement('div'); bl.className='brainline active-brain'; bl.textContent='— Anchor · Recovery coach'; log.appendChild(bl); scrollLog();
+  chatHistory.push({role:'assistant', content:text}); persistChat();
+}
+function renderLadder(){
+  const wrap=$('#ladder-list'); if(!wrap) return; wrap.innerHTML='';
+  Object.keys(LADDER_DOMAINS).forEach(d=>{
+    const deg=ladderDegree(d);
+    const prevDeg = ladder[d].lastDegree||0;
+    if(prevDeg>=2 && deg<prevDeg){ awardPoints(10, 'recovered in '+d); } // Recovery Credit — doctrine §11
+    ladder[d].lastDegree = deg;
+    const row=document.createElement('div'); row.className='subj-row';
+    const dotClass = deg<=1?'stable':deg<=3?'watch':'recovery';
+    row.innerHTML='<span class="dot3 '+dotClass+'"></span><span class="nm" style="text-transform:capitalize;">'+d+'</span><span class="st">degree '+deg+' of 5</span>';
+    wrap.appendChild(row);
+  });
+  renderRewards();
+  const osEl=$('#override-status');
+  if(osEl) osEl.textContent = humanOverrideActive() ? 'Active — paused for the next '+Math.ceil((ladder.overrideUntil-Date.now())/3600000)+'h.' : '';
+}
+$('#human-override-btn').addEventListener('click', ()=>{
+  document.querySelector('[data-view=chat]').click();
+  sendMessage("Human override — I need to explain what's actually going on before this goes any further.");
+});
+
+// ---------- rewards (doctrine §11: reward after recovery, never encourage overwork) ----------
+const ACHIEVEMENTS = {
+  'first-block':   {label:'First focus block', test:()=> (blockState.completed||0)>=1},
+  'streak-3':      {label:'3-day streak',       test:()=> (progress.streak||0)>=3},
+  'streak-7':      {label:'7-day streak',       test:()=> (progress.streak||0)>=7},
+  'streak-30':     {label:'30-day streak',      test:()=> (progress.streak||0)>=30},
+  'first-recovery':{label:'First recovery',     test:()=> Object.keys(ladder).some(d=>ladder[d].recoveredOnce)}
+};
+function awardPoints(amount, reason){
+  const t=todayStr();
+  if(rewards.pointsDate!==t){ rewards.pointsDate=t; rewards.pointsToday=0; }
+  const room = Math.max(0, 25-rewards.pointsToday); // daily cap — never reward overwork
+  const give = Math.min(amount, room);
+  if(give<=0) return;
+  rewards.points=(rewards.points||0)+give;
+  rewards.pointsToday=(rewards.pointsToday||0)+give;
+  persistProfile();
+  checkAchievements();
+  renderRewards();
+}
+function checkAchievements(){
+  Object.keys(ACHIEVEMENTS).forEach(id=>{
+    if(!rewards.achievements.includes(id) && ACHIEVEMENTS[id].test()){
+      rewards.achievements.push(id);
+      if(id==='first-recovery') Object.keys(ladder).forEach(d=>ladder[d].recoveredOnce=true);
+      persistProfile();
+    }
+  });
+}
+function renderRewards(){
+  const pEl=$('#rw-points'), tEl=$('#rw-today'); if(!pEl) return;
+  pEl.textContent = rewards.points||0;
+  tEl.textContent = (rewards.pointsDate===todayStr() ? rewards.pointsToday||0 : 0);
+  const wrap=$('#rw-achievements'); wrap.innerHTML='';
+  rewards.achievements.forEach(id=>{
+    const a=ACHIEVEMENTS[id]; if(!a) return;
+    const chip=document.createElement('div'); chip.className='chip'; chip.textContent='🏅 '+a.label;
+    wrap.appendChild(chip);
+  });
+}
+
+// ---------- mistake pattern tagging ----------
+function renderMistakePatterns(){
+  const wrap=$('#mistake-bars'); if(!wrap) return;
+  const total = mistakePatterns.careless+mistakePatterns.conceptual+mistakePatterns.rushed;
+  $('#mistake-bars-wrap').style.display = total ? 'block' : 'none';
+  if(!total) return;
+  wrap.innerHTML='';
+  [['careless','Careless slips'],['conceptual',"Didn't know it"],['rushed','Rushed']].forEach(([k,label])=>{
+    const pct = Math.round(mistakePatterns[k]/total*100);
+    const row=document.createElement('div'); row.style.marginBottom='6px';
+    row.innerHTML='<div class="hint" style="display:flex; justify-content:space-between;"><span>'+label+'</span><span>'+pct+'%</span></div>'+
+      '<div style="height:6px;border-radius:4px;background:var(--panel2);overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:var(--amber);"></div></div>';
+    wrap.appendChild(row);
+  });
+}
+function tagMistake(kind, domain, reason){
+  mistakePatterns[kind]=(mistakePatterns[kind]||0)+1;
+  persistProfile(); renderMistakePatterns();
+  if(domain) logLadderEvent(domain, reason);
+}
+
+// ---------- profile / memory ----------
+function applyProfileToForm(){
+  $('#p-name').value=profile.name||''; $('#p-role').value=profile.role||'student';
+  $('#p-subjects').value=profile.subjects||''; $('#p-style').value=profile.style||'';
+}
+function flashSaved(msg){ $('#profile-saved').textContent=msg||'Saved.'; setTimeout(()=>{ $('#profile-saved').textContent=''; }, 2200); }
+$('#save-profile').addEventListener('click', ()=>{
+  profile={ name:$('#p-name').value.trim(), role:$('#p-role').value, subjects:$('#p-subjects').value.trim(), style:$('#p-style').value.trim() };
+  persistProfile(); flashSaved('Saved.');
+});
+function renderMemory(){
+  const wrap=$('#memory-chips'); wrap.innerHTML='';
+  $('#memory-empty').style.display = memory.length ? 'none':'block';
+  memory.forEach((f,i)=>{
+    const chip=document.createElement('div'); chip.className='chip';
+    const span=document.createElement('span'); span.textContent=f;
+    const del=document.createElement('button'); del.textContent='✕';
+    del.addEventListener('click', ()=>{ memory.splice(i,1); renderMemory(); persistProfile(); });
+    chip.appendChild(span); chip.appendChild(del); wrap.appendChild(chip);
+  });
+}
+$('#add-fact').addEventListener('click', ()=>{
+  const v=$('#new-fact').value.trim(); if(!v) return;
+  memory.push(v); $('#new-fact').value=''; renderMemory(); persistProfile();
+});
+
+// ---------- links ----------
+const defaultLinks=[
+  {em:'📧', nm:'Gmail', ds:'Inbox', url:'https://mail.google.com'},
+  {em:'📅', nm:'Calendar', ds:'Schedule', url:'https://calendar.google.com'},
+  {em:'📁', nm:'Drive', ds:'Files', url:'https://drive.google.com'},
+  {em:'📝', nm:'Docs', ds:'Write', url:'https://docs.google.com'},
+  {em:'🗒️', nm:'Notion', ds:'Notes', url:'https://notion.so'},
+  {em:'🎵', nm:'Spotify', ds:'Focus music', url:'https://open.spotify.com'},
+  {em:'🗺️', nm:'Maps', ds:'Directions', url:'https://maps.google.com'},
+  {em:'📺', nm:'YouTube', ds:'Learn', url:'https://youtube.com'}
+];
+let customLinks=[];
+function renderLinks(){
+  const grid=$('#link-grid'); grid.innerHTML='';
+  [...defaultLinks, ...customLinks].forEach(l=>{
+    const a=document.createElement('a'); a.href=l.url; a.target='_blank'; a.rel='noopener';
+    a.innerHTML='<span class="em">'+l.em+'</span><span class="nm">'+l.nm+'</span><span class="ds">'+l.ds+'</span>';
+    grid.appendChild(a);
+  });
+}
+renderLinks();
+$('#add-link-btn').addEventListener('click', ()=>{
+  const nm=$('#custom-link-name').value.trim(); let url=$('#custom-link-url').value.trim();
+  if(!nm||!url) return;
+  if(!/^https?:\/\//i.test(url)) url='https://'+url;
+  customLinks.push({em:'🔗', nm, ds:'Custom', url});
+  $('#custom-link-name').value=''; $('#custom-link-url').value=''; renderLinks();
+});
+
+// ---------- timer ----------
+let timerTotal=25*60, timerLeft=25*60, timerRunning=false, timerHandle=null;
+const timeEl=$('#timer-time'), stateEl=$('#timer-state'), fillEl=$('#timer-fill');
+function fmt(s){ const m=Math.floor(s/60), r=s%60; return String(m).padStart(2,'0')+':'+String(r).padStart(2,'0'); }
+function renderTimer(){
+  timeEl.textContent=fmt(timerLeft);
+  const pct = 1 - timerLeft/timerTotal; const deg = pct*360;
+  fillEl.style.background = `conic-gradient(var(--amber) ${deg}deg, transparent ${deg}deg)`;
+  fillEl.style.borderRadius='50%';
+}
+function beep(){
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const o=ctx.createOscillator(), g=ctx.createGain();
+    o.type='sine'; o.frequency.value=880; o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.15, ctx.currentTime); o.start(); o.stop(ctx.currentTime+0.35);
+  }catch(e){}
+}
+function tick(){
+  timerLeft--;
+  if(timerLeft<=0){
+    clearInterval(timerHandle); timerRunning=false;
+    stateEl.textContent='DONE'; timeEl.textContent='00:00'; $('#timer-start').textContent='Start';
+    beep(); addFocusMinutes(Math.round(timerTotal/60));
+    if('Notification' in window){
+      if(Notification.permission==='granted') new Notification('JARVIS', {body:"Time's up."});
+      else if(Notification.permission!=='denied') Notification.requestPermission();
+    }
+    return;
+  }
+  renderTimer();
+}
+$('#timer-start').addEventListener('click', ()=>{
+  if(timerRunning){ clearInterval(timerHandle); timerRunning=false; $('#timer-start').textContent='Start'; stateEl.textContent='PAUSED'; }
+  else{ timerRunning=true; $('#timer-start').textContent='Pause'; stateEl.textContent='RUNNING'; timerHandle=setInterval(tick,1000); }
+});
+$('#timer-reset').addEventListener('click', ()=>{
+  clearInterval(timerHandle); timerRunning=false; timerLeft=timerTotal; $('#timer-start').textContent='Start'; stateEl.textContent='READY'; renderTimer();
+});
+document.querySelectorAll('.modebar [data-mins]').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    clearInterval(timerHandle); timerRunning=false; timerTotal=timerLeft=parseInt(b.dataset.mins)*60;
+    $('#timer-start').textContent='Start'; stateEl.textContent='READY'; renderTimer();
+  });
+});
+renderTimer();
+
+// ---------- calc speed drill ----------
+let drillDiff='medium';
+document.querySelectorAll('.diff').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.diff').forEach(x=>x.classList.remove('active-diff'));
+    b.classList.add('active-diff'); drillDiff=b.dataset.diff;
+  });
+});
+function allowedOps(){ return Array.from(document.querySelectorAll('#drill-ops input:checked')).map(i=>i.value); }
+function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function genProblem(){
+  const ops = allowedOps().length ? allowedOps() : ['add'];
+  const op = ops[randInt(0, ops.length-1)];
+  const ranges = { easy:{add:[1,20],sub:[1,20],mul:[2,9],div:[2,9]}, medium:{add:[10,99],sub:[10,99],mul:[3,12],div:[3,12]}, hard:{add:[100,999],sub:[100,999],mul:[6,20],div:[6,20]} }[drillDiff];
+  let a,b,answer,text;
+  if(op==='add'){ a=randInt(...ranges.add); b=randInt(...ranges.add); answer=a+b; text=`${a} + ${b}`; }
+  else if(op==='sub'){ a=randInt(...ranges.sub); b=randInt(...ranges.sub); if(b>a)[a,b]=[b,a]; answer=a-b; text=`${a} − ${b}`; }
+  else if(op==='mul'){ a=randInt(...ranges.mul); b=randInt(...ranges.mul); answer=a*b; text=`${a} × ${b}`; }
+  else { b=randInt(...ranges.div); answer=randInt(...ranges.div); a=b*answer; text=`${a} ÷ ${b}`; }
+  return {text, answer, op};
+}
+let curProblem=null, drillActive=false, wStart=0, wHandle=null, sessionSolved=0, streak=0;
+function fmtTime(ms){ return (ms/1000).toFixed(1)+'s'; }
+function nextProblem(){
+  curProblem=genProblem(); $('#drill-problem').textContent=curProblem.text; $('#drill-answer').value='';
+  $('#drill-feedback').textContent='\u00a0'; $('#drill-feedback').className='drill-feedback';
+  wStart=performance.now(); $('#drill-answer').focus();
+}
+function tickStopwatch(){ $('#drill-stopwatch').textContent=fmtTime(performance.now()-wStart); }
+function startDrill(){
+  drillActive=true; sessionSolved=0; streak=0; wrongStreak=0; clearRecovery();
+  $('#drill-session').style.display='block'; $('#drill-idle-stats').style.display='none';
+  $('#drill-start').style.display='none'; $('#drill-stop').style.display='block';
+  $('#drill-streak').textContent='Streak: 0'; $('#drill-count').textContent='0 solved this session';
+  wHandle=setInterval(tickStopwatch,100); nextProblem();
+}
+function endDrill(){
+  drillActive=false; clearInterval(wHandle);
+  $('#drill-session').style.display='none'; $('#drill-idle-stats').style.display='flex';
+  $('#drill-start').style.display='block'; $('#drill-stop').style.display='none';
+  persistDrillStats(); markActiveToday();
+}
+$('#drill-start').addEventListener('click', startDrill);
+$('#drill-stop').addEventListener('click', endDrill);
+$('#drill-answer').addEventListener('keydown', e=>{
+  if(e.key!=='Enter' || !drillActive || !curProblem) return;
+  const val=parseInt($('#drill-answer').value.trim(),10);
+  const elapsed=performance.now()-wStart; const fb=$('#drill-feedback');
+  const op=curProblem.op;
+  drillStats.byOp = drillStats.byOp||{};
+  drillStats.byOp[op] = drillStats.byOp[op]||{attempts:0, correct:0, times:[]};
+  drillStats.byOp[op].attempts++;
+  if(val===curProblem.answer){
+    fb.textContent='Correct — '+fmtTime(elapsed); fb.className='drill-feedback ok';
+    sessionSolved++; streak++; wrongStreak=0; clearRecovery();
+    drillStats.solved=(drillStats.solved||0)+1;
+    drillStats.byOp[op].correct++;
+    drillStats.byOp[op].times = (drillStats.byOp[op].times||[]).concat([elapsed]).slice(-30);
+    awardPoints(1, 'drill solved');
+    drillStats.times=(drillStats.times||[]).concat([elapsed]).slice(-50);
+    if(drillStats.best===null||elapsed<drillStats.best) drillStats.best=elapsed;
+    $('#drill-streak').textContent='Streak: '+streak; $('#drill-count').textContent=sessionSolved+' solved this session';
+    renderDrillStats(); renderProgress(); persistDrillStats();
+    setTimeout(nextProblem, 350);
+  } else {
+    fb.textContent='Not quite — answer was '+curProblem.answer; fb.className='drill-feedback bad';
+    streak=0; wrongStreak++; $('#drill-streak').textContent='Streak: 0';
+    persistDrillStats();
+    if(wrongStreak>=3){ showRecovery(); addWeakArea('Calc drill: '+(allowedOps().join('/')||'mixed')+' ('+drillDiff+')'); }
+    setTimeout(nextProblem, 900);
+  }
+});
+function renderDrillStats(){
+  $('#ds-best').textContent = drillStats.best!=null ? fmtTime(drillStats.best) : '—';
+  const times=drillStats.times||[]; const avg=times.length?times.reduce((a,b)=>a+b,0)/times.length:null;
+  $('#ds-avg').textContent = avg!=null ? fmtTime(avg) : '—';
+  $('#ds-solved').textContent = drillStats.solved||0;
+  renderCalcMastery();
+}
+function masteryBarHTML(label, pct, sublabel){
+  return '<div style="margin-bottom:10px;">'+
+    '<div class="hint" style="display:flex; justify-content:space-between; color:var(--text);"><span>'+label+'</span><span style="color:var(--muted);">'+sublabel+'</span></div>'+
+    '<div style="height:7px;border-radius:4px;background:var(--panel2);overflow:hidden;margin-top:3px;"><div style="height:100%;width:'+pct+'%;background:'+(pct>=85?'var(--good)':pct>=50?'var(--amber)':'var(--danger)')+';"></div></div>'+
+  '</div>';
+}
+function masteryLevel(pct){ return pct>=90?'Mastered':pct>=70?'Solid':pct>=40?'Developing':'New'; }
+const OP_LABELS={add:'Addition (+)', sub:'Subtraction (−)', mul:'Multiplication (×)', div:'Division (÷)'};
+function renderCalcMastery(){
+  const byOp = drillStats.byOp||{};
+  const ops = Object.keys(byOp).filter(o=>byOp[o].attempts>0);
+  $('#calc-mastery-wrap').style.display = ops.length ? 'block':'none';
+  if(!ops.length) return;
+  const wrap=$('#calc-mastery-list'); wrap.innerHTML='';
+  ['add','sub','mul','div'].filter(o=>byOp[o]&&byOp[o].attempts>0).forEach(o=>{
+    const st=byOp[o];
+    const accuracy = Math.round((st.correct/st.attempts)*100);
+    const times=st.times||[]; const avgT = times.length? (times.reduce((a,b)=>a+b,0)/times.length/1000).toFixed(1)+'s avg' : '';
+    wrap.innerHTML += masteryBarHTML(OP_LABELS[o]+' — '+masteryLevel(accuracy), accuracy, accuracy+'% · '+st.attempts+' done'+(avgT?' · '+avgT:''));
+  });
+}
+
+// ---------- flashcards ----------
+function cardId(){ return 'c'+Date.now()+Math.floor(Math.random()*1000); }
+function renderSubjectStatus(){
+  const groups={};
+  flashcards.forEach(c=>{
+    const s=c.subject||'General';
+    if(!groups[s]) groups[s]={cards:[]};
+    groups[s].cards.push(c);
+  });
+  const subjects=Object.keys(groups);
+  $('#subject-status-wrap').style.display = subjects.length ? 'block':'none';
+  const wrap=$('#subject-status-list'); wrap.innerHTML='';
+  subjects.forEach(s=>{
+    const cards=groups[s].cards;
+    const pct = Math.round(cards.reduce((sum,c)=>sum+Math.min(c.box||1,3),0) / (cards.length*3) * 100);
+    const row=document.createElement('div');
+    row.innerHTML = masteryBarHTML(s+' — '+masteryLevel(pct), pct, pct+'% · '+cards.length+' card'+(cards.length===1?'':'s'));
+    wrap.appendChild(row);
+  });
+}
+function renderCards(){
+  renderSubjectStatus();
+  const total=flashcards.length;
+  const due=flashcards.filter(c=>(c.box||1)<3 && (!c.due || c.due<=Date.now())).length + flashcards.filter(c=>(c.box||1)===3 && c.due<=Date.now()).length;
+  const mastered=flashcards.filter(c=>(c.box||1)>=3).length;
+  $('#cd-total').textContent=total; $('#cd-due').textContent=Math.max(due,0); $('#cd-mastered').textContent=mastered;
+  const list=$('#card-list'); list.innerHTML='';
+  $('#cards-empty').style.display = total?'none':'block';
+  flashcards.forEach((c,i)=>{
+    const row=document.createElement('div'); row.className='card-list-item';
+    row.innerHTML='<span>'+(c.subject?'['+c.subject+'] ':'')+c.front+' → '+c.back+'</span>';
+    const del=document.createElement('button'); del.className='btn ghost small'; del.textContent='✕';
+    del.addEventListener('click', ()=>{ flashcards.splice(i,1); persistCards(); renderCards(); });
+    row.appendChild(del); list.appendChild(row);
+  });
+}
+$('#add-card-btn').addEventListener('click', ()=>{
+  const f=$('#new-card-front').value.trim(), b=$('#new-card-back').value.trim(), s=$('#new-card-subject').value.trim();
+  if(!f||!b) return;
+  flashcards.push({id:cardId(), front:f, back:b, subject:s, box:1, due:0, misses:0});
+  $('#new-card-front').value=''; $('#new-card-back').value=''; $('#new-card-subject').value='';
+  persistCards(); renderCards();
+});
+let studyQueue=[], studyIdx=0;
+function dueCards(){ return flashcards.filter(c=>!c.due || c.due<=Date.now()); }
+$('#study-cards-btn').addEventListener('click', ()=>{
+  studyQueue=dueCards(); studyIdx=0;
+  if(!studyQueue.length){ pushToast('No cards due right now.'); return; }
+  $('#card-study').style.display='block'; showStudyCard();
+});
+function pushToast(msg){ $('#cards-empty').textContent=msg; $('#cards-empty').style.display='block'; setTimeout(renderCards, 1600); }
+function showStudyCard(){
+  const c=studyQueue[studyIdx];
+  $('#flip-card').classList.remove('flipped');
+  $('#flip-front').textContent=c.front; $('#flip-back').textContent=c.back;
+  $('#card-progress').textContent=(studyIdx+1)+' of '+studyQueue.length;
+}
+$('#flip-card').addEventListener('click', ()=>{ $('#flip-card').classList.toggle('flipped'); });
+function gradeCard(good){
+  const c=studyQueue[studyIdx];
+  const idx=flashcards.findIndex(x=>x.id===c.id);
+  if(idx>-1){
+    let box=flashcards[idx].box||1;
+    if(!good){
+      flashcards[idx].misses=(flashcards[idx].misses||0)+1;
+      if(flashcards[idx].misses>=2) addWeakArea((flashcards[idx].subject?flashcards[idx].subject+': ':'')+flashcards[idx].front);
+    } else { flashcards[idx].misses=0; }
+    const wasMastered = box>=3;
+    box = good ? Math.min(3, box+1) : 1;
+    if(box>=3 && !wasMastered) awardPoints(3, 'card mastered');
+    const intervalDays = box===1?0 : box===2?1 : 4;
+    flashcards[idx].box=box; flashcards[idx].due=Date.now()+intervalDays*86400000;
+  }
+  persistCards();
+  studyIdx++;
+  if(studyIdx>=studyQueue.length){ $('#card-study').style.display='none'; renderCards(); markActiveToday(); }
+  else showStudyCard();
+}
+$('#card-know').addEventListener('click', ()=>gradeCard(true));
+$('#card-again').addEventListener('click', ()=>gradeCard(false));
+$('#card-study-end').addEventListener('click', ()=>{ $('#card-study').style.display='none'; renderCards(); });
+
+// ---------- focus block ----------
+function isDoneToday(){ return blockState.doneDate===todayStr(); }
+function renderBlockUI(){
+  const active = blockState.active && blockState.endAt>Date.now();
+  if(blockState.active && blockState.endAt<=Date.now()){
+    blockState.active=false; blockState.completed=(blockState.completed||0)+1; blockState.doneDate=todayStr();
+    awardPoints(5, 'focus block completed');
+    persistBlock();
+  }
+  $('#block-status').className='block-status '+(active?'on':'off');
+  $('#block-dot').className='dot '+(active?'on':'off');
+  $('#block-status-text').textContent = active ? 'Focus block active: '+blockState.plan : 'No focus block active';
+  $('#block-setup').style.display = active ? 'none':'block';
+  $('#block-active-card').style.display = active ? 'block':'none';
+  if(active){
+    $('#block-plan-display').textContent = blockState.plan;
+    $('#block-end-time').textContent = new Date(blockState.endAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  }
+  $('#bs-completed').textContent = blockState.completed||0;
+  $('#bs-broken').textContent = blockState.broken||0;
+  renderLockUI();
+}
+function renderLockUI(){
+  $('#lock-toggle').checked = !!blockState.lockEnabled;
+  const done = isDoneToday();
+  $('#mark-done-btn').style.display = (blockState.lockEnabled && !done) ? 'block' : 'none';
+  $('#lock-status').textContent = !blockState.lockEnabled
+    ? "Off — this is your call to turn on, not a default. This locks the two buttons below inside JARVIS; it can't touch the real apps on your phone, so pair it with Screen Time / Digital Wellbeing for that."
+    : done
+      ? "Unlocked for today — nice work. Locks again after midnight until you study again."
+      : "Locked — complete a focus block today (or mark it done manually) to unlock Instagram & Pinterest in this app.";
+  document.querySelectorAll('.distract-grid button').forEach(b=>{
+    b.classList.toggle('locked', blockState.lockEnabled && !done);
+  });
+}
+$('#lock-toggle').addEventListener('change', e=>{
+  blockState.lockEnabled = e.target.checked;
+  persistBlock(); renderLockUI();
+});
+$('#mark-done-btn').addEventListener('click', ()=>{
+  blockState.doneDate = todayStr();
+  persistBlock(); renderLockUI(); markActiveToday();
+});
+$('#block-start-btn').addEventListener('click', ()=>{
+  const plan=$('#block-plan').value.trim() || 'Focused study';
+  const mins=parseInt($('#block-mins').value,10);
+  blockState = {...blockState, active:true, plan, endAt:Date.now()+mins*60000};
+  persistBlock(); renderBlockUI(); markActiveToday();
+});
+$('#block-end-btn').addEventListener('click', ()=>{
+  blockState.active=false; persistBlock(); renderBlockUI();
+});
+setInterval(renderBlockUI, 15000);
+let pendingDistract=null;
+let lockToastTimer=null;
+document.querySelectorAll('.distract-grid button').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    if(blockState.lockEnabled && !isDoneToday()){
+      clearTimeout(lockToastTimer);
+      $('#lock-toast').textContent = b.dataset.app+' unlocks once today\'s study block is done.';
+      lockToastTimer=setTimeout(()=>{ $('#lock-toast').textContent=''; }, 2800);
+      return;
+    }
+    const active = blockState.active && blockState.endAt>Date.now();
+    if(!active){ window.open(b.dataset.url,'_blank'); return; }
+    pendingDistract=b.dataset.url;
+    $('#distract-title').textContent='Still want to open '+b.dataset.app+'?';
+    $('#distract-modal').classList.add('show');
+  });
+});
+$('#distract-cancel').addEventListener('click', ()=>{ $('#distract-modal').classList.remove('show'); pendingDistract=null; });
+document.querySelectorAll('#distract-reasons button').forEach(rb=>{
+  rb.addEventListener('click', ()=>{
+    blockState.broken=(blockState.broken||0)+1; persistBlock(); renderBlockUI();
+    logLadderEvent('focus', rb.dataset.reason);
+    if(pendingDistract) window.open(pendingDistract,'_blank');
+    $('#distract-modal').classList.remove('show'); pendingDistract=null;
+  });
+});
+
+// ---------- smart alarm ----------
+function renderAlarms(){
+  const list=$('#alarm-list'); list.innerHTML='';
+  $('#alarm-empty').style.display = alarms.length ? 'none':'block';
+  alarms.forEach((a,i)=>{
+    const row=document.createElement('div'); row.className='alarm-item';
+    row.innerHTML='<div><div class="t">'+a.time+'</div><div class="l">'+(a.label||'Alarm')+'</div></div>';
+    const del=document.createElement('button'); del.className='btn ghost small'; del.textContent='Remove';
+    del.addEventListener('click', ()=>{ alarms.splice(i,1); persistAlarms(); renderAlarms(); scheduleAllAlarms(); });
+    row.appendChild(del); list.appendChild(row);
+  });
+}
+$('#alarm-add-btn').addEventListener('click', ()=>{
+  const t=$('#alarm-time').value; if(!t) return;
+  alarms.push({id:cardId(), time:t, label:$('#alarm-label').value.trim()});
+  $('#alarm-label').value='';
+  persistAlarms(); renderAlarms(); scheduleAllAlarms();
+});
+let alarmTimers=[];
+function scheduleAllAlarms(){
+  alarmTimers.forEach(t=>clearTimeout(t)); alarmTimers=[];
+  alarms.forEach(a=>{
+    const [h,m]=a.time.split(':').map(Number);
+    const now=new Date(); let target=new Date(); target.setHours(h,m,0,0);
+    if(target<=now) target.setDate(target.getDate()+1);
+    const ms=target-now;
+    if(ms<2147483000){ alarmTimers.push(setTimeout(()=>fireAlarm(a), ms)); }
+  });
+}
+function fireAlarm(a){
+  beep();
+  if('Notification' in window && Notification.permission==='granted') new Notification('JARVIS', {body:a.label||'Alarm'});
+  document.querySelector('[data-view=chat]').click();
+  const greeting = "Good "+(new Date().getHours()<12?'morning':'day')+(profile.name?', '+profile.name:'')+". "+(a.label?a.label+'. ':'')+"What's on your mind?";
+  pushBotStatic(greeting);
+  chatHistory.push({role:'assistant', content:greeting}); persistChat();
+  if(recognizer){
+    voiceCallActive=true; callMuted=false;
+    $('#call-overlay').className='call-overlay show speaking';
+    $('#call-status').textContent='Speaking…'; $('#call-sub').textContent=greeting;
+    $('#mode-voice-btn').classList.add('active'); $('#mode-text-btn').classList.remove('active');
+    speak(greeting, ()=>{ if(voiceCallActive && !callMuted) startCallListening(); });
+  } else {
+    speak(greeting);
+  }
+  scheduleAllAlarms(); // reschedule for next day
+}
+</script>
+</body>
+</html>
