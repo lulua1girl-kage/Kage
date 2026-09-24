@@ -24,12 +24,24 @@ jobs:
           path: .nori-base
           fetch-depth: 1
 
+      - name: Extract Nori V36.5
+        shell: bash
+        run: |
+          set -e
+          mkdir -p .nori-v36
+          unzip -q .nori-base/nori-v36_5-build-script-fixed.zip -d .nori-v36
+          PROJECT_DIR="$(find .nori-v36 -type d -name v364-connect -print -quit)"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Nori project: $PROJECT_DIR"
+
       - name: Check inputs
         shell: bash
         run: |
           set -e
           test -f scripts/merge_kage.py
           test -f .nori-base/nori-v36_5-build-script-fixed.zip
+          test -n "$PROJECT_DIR"
           echo "Workflow job started successfully."
 
       - name: Set up Java 21
