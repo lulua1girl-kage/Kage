@@ -19,7 +19,7 @@ let c=null;try{c=window.supabase?.createClient(U,K)}catch(e){}
 const L=k=>{try{return JSON.parse(localStorage.getItem("kage.jarvis."+k)||"null")}catch(e){return null}};
 const S=(k,v)=>{try{localStorage.setItem("kage.jarvis."+k,JSON.stringify(v))}catch(e){}};
 const img=f=>!f?Promise.resolve(null):new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)});
-window.__KAGE_JARVIS_BRIDGE={client:c,localLoad:L,localSave:S,imageData:img};
+window.__KAGE_JARVIS_BRIDGE={client:c,localLoad:L,localSave:S,imageData:img,url:U,key:K};
 })();
 </script>
 '''
@@ -43,7 +43,7 @@ new="""  try{
       const message=Array.isArray(prompt)?prompt.map(x=>String(x?.content||x?.text||"")).join("\n"):String(prompt||"");
       const imageDataUrl=opts.images?await b.imageData(opts.images):null;
       const state={profile,memory,weakAreas,progress,drillStats,blockState,examPrep,studyNotes,mistakePatterns,ladder,rewards,excuseLog};
-      const r=await fetch(U+"/functions/v1/nori-brain",{method:"POST",headers:{Authorization:"Bearer "+sess.access_token,apikey:K,"Content-Type":"application/json"},body:JSON.stringify({message,history:chatHistory.slice(-12),stateSummary:state,brainContext:{source:"jarvis-merged",mode:convoMode,mentorOn,voiceCallActive},nextMove:null,imageDataUrl})});
+      const r=await fetch(b.url+"/functions/v1/nori-brain",{method:"POST",headers:{Authorization:"Bearer "+sess.access_token,apikey:b.key,"Content-Type":"application/json"},body:JSON.stringify({message,history:chatHistory.slice(-12),stateSummary:state,brainContext:{source:"jarvis-merged",mode:convoMode,mentorOn,voiceCallActive},nextMove:null,imageDataUrl})});
       const j=await r.json().catch(()=>({}));
       if(!r.ok||!j.ok) throw new Error(j.error||"NORI_BRAIN_UNAVAILABLE");
       return {text:j.reply||j.text||"",provider:j.provider,model:j.model};
@@ -74,15 +74,25 @@ repls={
 "const persistAlarms = debounced(async ()=>{ if(alarmDocRef) try{ await alarmDocRef.set({alarms}); }catch(e){} }, 300);":"const persistAlarms = debounced(async ()=>{window.__KAGE_JARVIS_BRIDGE?.localSave('alarms',alarms);if(alarmDocRef)try{await alarmDocRef.set({alarms})}catch(e){}},300);"
 }
 for(const [a,b] of Object.entries(repls)){
-    if(!s.includes(a)) throw new Error("persist function missing")
-    s=s.replace(a,b,1)
+  if(!s.includes(a)) throw new Error("persist function missing")
+  s=s.replace(a,b,1)
 }
 s=s.replace("setStatus('online · memory synced');","setStatus(sample?'online · Nori Brain connected':'local mode · sign in for AI');")
 s=s.replace("setStatus(sample ? 'online · memory local to this device' : 'preview mode');","setStatus(sample?'online · Nori Brain connected':'local mode · sign in for AI');")
 jarvis.write_text(s,encoding="utf-8")
 
-const nav=www/"nori-jarvis-integration.js"
-nav.write_text("""(function(g){'use strict';function add(){if(document.querySelector('[data-nori-jarvis-tools]'))return;const d=document.getElementById('nori-navigation-drawer');if(d){const s=document.createElement('section');s.className='nori-nav-group';s.innerHTML='<div class="nori-nav-group-title">ASSISTANT</div><a class="nori-nav-link" data-nori-jarvis-tools href="jarvis.html"><span>✦</span><b>JARVIS TOOLS</b></a>';d.insertBefore(s,d.firstChild)}const t=document.querySelector('.nori-topbar');if(t&&!t.querySelector('[data-nori-jarvis-tools]')){const a=document.createElement('a');a.href='jarvis.html';a.className='nori-nav-launch';a.dataset.noriJarvisTools='1';a.textContent='✦ JARVIS';a.style.textDecoration='none';t.appendChild(a)}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{setTimeout(add,200);setTimeout(add,1000)});else{setTimeout(add,200);setTimeout(add,1000)}})(window);""",encoding="utf-8")
-idx=www/"index.html"; x=idx.read_text(encoding="utf-8"); x=x.replace('<script src="nori-navigation-brain-v1.js"></script>','<script src="nori-navigation-brain-v1.js"></script><script src="nori-jarvis-integration.js"></script>',1); idx.write_text(x,encoding="utf-8")
-p=www/"nori-system-directory-v34.js"; q=p.read_text(encoding="utf-8"); q=q.replace("'danatbayu9@gmail.com'","'danatbayu9@gmail.com','mirasutton58@gmail.com','justicesteve.councle@gmail.com'",1); p.write_text(q,encoding="utf-8")
-print("KAGE merge complete")
+# IMPORTANT: the inspected V36.5 base already has the intended Home / Recover / Study /
+# Tracker / Profile command suite and bottom navigation. Do not replace it with JARVIS.
+# JARVIS is kept as an integrated tool page only.
+idx=www/"index.html"
+x=idx.read_text(encoding="utf-8")
+# no navigation injection
+
+p=www/"nori-system-directory-v34.js"
+q=p.read_text(encoding="utf-8")
+if "'danatbayu@gmail.com'" not in q and "'danatbayu9@gmail.com'" in q:
+  q=q.replace("'danatbayu9@gmail.com'","'danatbayu@gmail.com','mirasutton58@gmail.com','justicesteve.councle@gmail.com'",1)
+elif "'mirasutton58@gmail.com'" not in q:
+  raise SystemExit("Could not find existing admin allowlist anchor")
+p.write_text(q,encoding="utf-8")
+print("KAGE merge complete: preservation-first, no shell/nav replacement")
