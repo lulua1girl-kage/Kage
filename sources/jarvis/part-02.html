@@ -1,0 +1,700 @@
+      if(cardsSnap.exists){ flashcards = cardsSnap.data().cards || []; }
+      const bsnap = await blockDocRef.get();
+      if(bsnap.exists){ blockState = Object.assign(blockState, bsnap.data()); }
+      const asnap = await alarmDocRef.get();
+      if(asnap.exists){ alarms = asnap.data().alarms || []; }
+    }catch(e){}
+    setStatus('online · memory synced');
+  } else {
+    setStatus(sample ? 'online · memory local to this device' : 'preview mode');
+  }
+
+  $('#talk-prompt-avatar').src=AVATAR_MAIN;
+  $('#call-avatar-img').src=AVATAR_MAIN;
+  applyProfileToForm();
+  renderMemory();
+  renderChatHistory();
+  renderDrillStats();
+  renderProgress();
+  renderCards();
+  renderBlockUI();
+  renderAlarms();
+  renderWeakAreas();
+  renderRecap();
+  renderBrainRoster();
+  renderExamPrep();
+  renderStudyNotes();
+  renderMistakePatterns();
+  renderLadder();
+  renderRewards();
+  renderExcuseLog();
+  checkPhotoCapability();
+  scheduleAllAlarms();
+  checkStreakOnLoad();
+  if(chatHistory.length===0){
+    pushBotStatic("Hey"+(profile.name?', '+profile.name:'')+". I'm JARVIS. Ask me anything, or set up your profile in the Me tab so I can tailor how I help.");
+  }
+}
+boot();
+
+// ---------- persistence helpers ----------
+function debounced(fn, ms){ let t=null; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+const persistProfile = debounced(async ()=>{ if(profileDocRef) try{ await profileDocRef.set({profile, memory, weakAreas, recap, examPrep, studyNotes, mistakePatterns, ladder, rewards, excuseLog}); }catch(e){} }, 400);
+const persistChat = debounced(async ()=>{ if(chatDocRef) try{ await chatDocRef.set({messages: chatHistory.slice(-40)}); }catch(e){} }, 500);
+const persistDrillStats = debounced(async ()=>{ if(drillDocRef) try{ await drillDocRef.set(drillStats); }catch(e){} }, 500);
+const persistProgress = debounced(async ()=>{ if(progressDocRef) try{ await progressDocRef.set(progress); }catch(e){} }, 400);
+const persistCards = debounced(async ()=>{ if(cardsDocRef) try{ await cardsDocRef.set({cards:flashcards}); }catch(e){} }, 400);
+const persistBlock = debounced(async ()=>{ if(blockDocRef) try{ await blockDocRef.set(blockState); }catch(e){} }, 300);
+const persistAlarms = debounced(async ()=>{ if(alarmDocRef) try{ await alarmDocRef.set({alarms}); }catch(e){} }, 300);
+
+// ---------- tabs ----------
+document.querySelectorAll('nav.tabbar button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav.tabbar button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    $('#view-'+btn.dataset.view).classList.add('active');
+  });
+});
+document.querySelectorAll('#view-study .toptabs .tt').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('#view-study .toptabs .tt').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('#view-study .subface').forEach(f=>f.classList.remove('active'));
+    $('#sub-'+btn.dataset.sub).classList.add('active');
+  });
+});
+
+// ---------- theme ----------
+$('#theme-toggle').addEventListener('click', ()=>{
+  const r=document.documentElement;
+  r.setAttribute('data-theme', r.getAttribute('data-theme')==='dark'?'light':'dark');
+});
+
+// ---------- streak / progress ----------
+function checkStreakOnLoad(){
+  const t=todayStr();
+  if(progress.lastDate!==t){
+    // new day seen; streak increments only when they actually engage (handled elsewhere), just render for now
+  }
+  renderProgress();
+}
+function markActiveToday(){
+  const t=todayStr();
+  if(progress.lastDate===t) return;
+  const y=new Date(Date.now()-86400000);
+  const yStr=y.getFullYear()+'-'+(y.getMonth()+1)+'-'+y.getDate();
+  const brokeStreak = progress.lastDate && progress.lastDate!==yStr && (progress.streak||0)>0;
+  progress.streak = (progress.lastDate===yStr) ? (progress.streak||0)+1 : 1;
+  progress.lastDate=t;
+  persistProgress();
+  renderProgress();
+  awardPoints(2, 'showed up today');
+  if(brokeStreak) logLadderEvent('consistency', 'time gap between sessions');
+}
+function addFocusMinutes(min){
+  progress.totalMin=(progress.totalMin||0)+min;
+  markActiveToday();
+  persistProgress();
+  renderProgress();
+}
+function renderProgress(){
+  $('#pg-streak').textContent = progress.streak||0;
+  $('#pg-minutes').textContent = progress.totalMin||0;
+  $('#pg-drills').textContent = drillStats.solved||0;
+}
+
+// ---------- chat ----------
+const log=$('#chat-log');
+function scrollLog(){ log.scrollTop=log.scrollHeight; }
+function pushMsg(role, text){
+  const wrap=document.createElement('div');
+  if(role==='sys'){ wrap.className='msg sys'; wrap.textContent=text; log.appendChild(wrap); scrollLog(); return; }
+  wrap.className='msgrow '+role;
+  if(role==='bot'){
+    const av=document.createElement('img'); av.src=AVATAR_MAIN; av.className='avatar sm'; wrap.appendChild(av);
+  }
+  const bubble=document.createElement('div'); bubble.className='msg '+role; bubble.textContent=text;
+  wrap.appendChild(bubble);
+  log.appendChild(wrap);
+  scrollLog();
+}
+function pushBotStatic(text){ pushMsg('bot', text); }
+function renderChatHistory(){
+  log.innerHTML='';
+  chatHistory.forEach(m=>pushMsg(m.role==='user'?'user':'bot', m.content));
+}
+
+let convoMode='casual'; // casual | tutor | exam | planning
+function setConvoMode(mode){
+  convoMode=mode; mentorOn = (mode==='tutor' || mode==='exam');
+  document.querySelectorAll('#convo-modes button').forEach(b=>b.classList.toggle('active', b.dataset.mode===mode));
+}
+document.querySelectorAll('#convo-modes button').forEach(b=>{
+  b.addEventListener('click', ()=>setConvoMode(b.dataset.mode));
+});
+
+// ---------- the 7-brain council ----------
+// Real engines: only 2 (Claude "default" tier, Claude "quick" tier as automatic fallback).
+// Each named brain is a specialist persona routed to whichever engine suits it, and every
+// persona falls back to the quick engine if its preferred one is busy — 7 roles, 2 engines.
+const BRAINS = [
+  {id:'aegis',   name:'Aegis',   role:'Deep reasoning',    tier:'default', when:t=>/why|explain|prove|derive|analyz|compare|essay|design/i.test(t)},
+  {id:'numen',   name:'Numen',   role:'Math & logic',      tier:'default', when:t=>/[0-9].*[+\-×x*/÷=]|\bsolve\b|\bequation\b|\bcalculate\b/i.test(t)},
+  {id:'mentor',  name:'Mentor',  role:'Socratic tutor',    tier:'default', when:()=>mentorOn},
+  {id:'anchor',  name:'Anchor',  role:'Recovery coach',    tier:'default', when:()=>recoveryContextActive},
+  {id:'compass', name:'Compass', role:'Planning & recap',  tier:'default', when:t=>/plan|schedule|recap|focus block|what should i study/i.test(t)},
+  {id:'echo',    name:'Echo',    role:'Voice conversation',tier:'quick',   when:()=>voiceCallActive},
+  {id:'pulse',   name:'Pulse',   role:'Quick response',    tier:'quick',   when:t=>t.length<40},
+  {id:'lumen',   name:'Lumen',   role:'Vision — deep read', tier:'default', when:()=>false},
+  {id:'iris',    name:'Iris',    role:'Vision — fast backup',tier:'quick',  when:()=>false}
+];
+function renderBrainRoster(){
+  const wrap=$('#brain-roster'); if(!wrap) return; wrap.innerHTML='';
+  BRAINS.forEach(b=>{
+    const row=document.createElement('div'); row.className='brain-row';
+    row.innerHTML='<span class="dot2"></span><b>'+b.name+'</b><span class="role">— '+b.role+'</span>';
+    wrap.appendChild(row);
+  });
+}
+let recoveryContextActive=false;
+// ---------- pattern callouts ----------
+// Two very different kinds of repeated reason:
+// "callout" reasons (later/tomorrow, low motivation, too busy) are rationalizations —
+//   worth naming directly and specifically once they're a genuine pattern, not a guess.
+// "care" reasons (tired/unwell) NEVER get confronted, no matter how often — repetition
+//   there is a signal to take more seriously and gently, never a signal of dishonesty.
+const EXCUSE_CATEGORIES = [
+  {id:'procrastination', label:'"later / tomorrow"',    pattern:/\b(i'?ll do it later|do it tomorrow|not right now|in a bit|after this)\b/i, tone:'callout'},
+  {id:'motivation',      label:"low motivation",         pattern:/\b(don'?t feel like it|don'?t want to|can'?t be bothered|no point( in)? (doing|trying))\b/i, tone:'callout'},
+  {id:'busy',            label:'"too busy"',             pattern:/\b(too busy|no time|swamped|slammed)\b/i, tone:'callout'},
+  {id:'fatigue',         label:'tired / unwell',         pattern:/\b(so tired|exhausted|feel sick|unwell|burnt out|burnout|can'?t keep my eyes open)\b/i, tone:'care'}
+];
+function detectExcuse(text){ return EXCUSE_CATEGORIES.find(c=>c.pattern.test(text)) || null; }
+function countExcuse(id, days){
+  const cutoff = Date.now()-days*86400000;
+  return excuseLog.filter(e=>e.id===id && e.at>cutoff);
+}
+function logExcuseAndBuildNote(text){
+  const cat = detectExcuse(text);
+  if(!cat) return null;
+  excuseLog.push({id:cat.id, text:text.slice(0,120), at:Date.now()});
+  excuseLog = excuseLog.filter(e=>Date.now()-e.at < 30*86400000); // keep 30 days
+  persistProfile();
+  const recent = countExcuse(cat.id, 14);
+  if(cat.tone==='callout' && recent.length>=3){
+    return "PATTERN DETECTED: they've given a "+cat.label+" reason "+recent.length+" times in the last 14 days, most recently just now: \""+text.slice(0,100)+"\". This is a real pattern, not a guess — name it directly and specifically, reference the repetition itself, and ask one direct question about what's actually going on underneath it. Firm, not harsh; strong, not mean.";
+  }
+  if(cat.tone==='care' && recent.length>=5){
+    return "PATTERN NOTICED: they've mentioned being tired/unwell "+recent.length+" times in the last 14 days — frequent enough to take seriously as a possible sleep or workload problem, not as an excuse to push back on. Name it with real concern, and suggest they consider talking to a real person (parent, doctor, counselor) about their sleep or workload. Caring, direct, never accusatory.";
+  }
+  return null;
+}
+function renderExcuseLog(){
+  const wrap=$('#excuse-log-wrap'); if(!wrap) return;
+  const counts={};
+  EXCUSE_CATEGORIES.forEach(c=>{ counts[c.id]=countExcuse(c.id,14).length; });
+  const any=Object.values(counts).some(n=>n>0);
+  wrap.style.display = any ? 'block':'none';
+  if(!any) return;
+  const list=$('#excuse-log-list'); list.innerHTML='';
+  EXCUSE_CATEGORIES.forEach(c=>{
+    if(!counts[c.id]) return;
+    const row=document.createElement('div'); row.className='card-list-item';
+    row.innerHTML='<span>'+c.label+'</span><span class="hint" style="margin:0;">'+counts[c.id]+'x / 14 days</span>';
+    list.appendChild(row);
+  });
+}
+
+function pickBrain(text){
+  if(convoMode==='planning') return BRAINS.find(b=>b.id==='compass');
+  if(recoveryContextActive) return BRAINS.find(b=>b.id==='anchor');
+  if(pendingPatternNote) return BRAINS.find(b=>b.id==='anchor');
+  if(voiceCallActive) return BRAINS.find(b=>b.id==='echo');
+  if(convoMode==='tutor' || convoMode==='exam') return BRAINS.find(b=>b.id==='mentor');
+  // casual mode: automatic topic-based routing
+  const priority=['numen','compass','aegis','pulse'];
+  for(const id of priority){
+    const b=BRAINS.find(x=>x.id===id);
+    if(b.when(text)) return b;
+  }
+  return BRAINS.find(b=>b.id==='pulse');
+}
+
+function buildContext(userText){
+  let ctx = "You are JARVIS, a warm, sharp, no-nonsense personal AI assistant speaking directly to the user. Keep replies concise and conversational unless asked for depth. "+
+    "You're friendly, not a pushover: if they say they're tired, stuck, or making excuses, don't just validate and agree — give one real, practical instruction (go wash your face, get some water, take a short break, then come back to it) and expect them to actually do it. Strict but friendly, not endlessly cooperative.\n";
+  if(profile.name) ctx += "The user's name is "+profile.name+".\n";
+  if(profile.role) ctx += "They are "+({student:'a student', professional:'a working professional', other:'best described in their own words'}[profile.role]||profile.role)+".\n";
+  if(profile.subjects) ctx += "Their focus areas / subjects: "+profile.subjects+".\n";
+  if(profile.style) ctx += "They like explanations delivered like this: "+profile.style+".\n";
+  if(memory.length) ctx += "Things you remember about them: "+memory.join('; ')+".\n";
+  if(weakAreas.length) ctx += "Topics they've been struggling with recently: "+weakAreas.slice(-6).map(w=>w.topic).join('; ')+". Bring these up gently if relevant, don't lecture about them unprompted.\n";
+  if(progress.streak) ctx += "They're on a "+progress.streak+"-day study streak with "+ (progress.totalMin||0) +" total focus minutes logged — acknowledge real momentum, don't overdo the praise.\n";
+  if(mentorOn){
+    ctx += "MENTOR MODE IS ON: act as a patient, encouraging tutor. Don't just give answers — ask guiding questions, check understanding, break problems into steps, and let the student do the thinking. Praise real progress, not effort alone. If they seem to be struggling after repeated mistakes, slow down, normalize the difficulty, and offer a smaller first step rather than the full problem. If a topic they've struggled with before comes up again, briefly acknowledge you remember and adjust your approach rather than repeating the same explanation.\n";
+  }
+  if(convoMode==='exam' && examPrep.name){
+    const daysLeft = Math.ceil((new Date(examPrep.date)-new Date())/86400000);
+    ctx += "EXAM MODE: they're preparing for \""+examPrep.name+"\" ("+(examPrep.subject||'')+"), "+(daysLeft>=0?daysLeft+' days away':'already past — ask if it went ok')+". Stay focused on exam-relevant practice and calm confidence-building, not tangents.\n";
+  }
+  if(convoMode==='planning'){
+    ctx += "PLANNING MODE: help them turn what they've told you into a concrete, short, prioritized plan — not a long essay. Ask about available time if they haven't said.\n";
+  }
+  if(studyNotes.length){
+    ctx += "Saved study notes they can reference: "+studyNotes.slice(-5).map(n=>'['+n.subject+'] '+n.text.slice(0,80)).join(' | ')+".\n";
+  }
+  if(pendingPatternNote){ ctx += pendingPatternNote+"\n"; }
+  ctx += "\nUser's message: " + userText;
+  return ctx;
+}
+
+const BRAIN_PERSONA_LINES = {
+  aegis:   "Right now you're playing the Aegis role: reason carefully and thoroughly before answering.",
+  numen:   "Right now you're playing the Numen role: a precise, patient math and logic specialist. Show your work in clear steps.",
+  mentor:  "Right now you're playing the Mentor role: Socratic, patient tutoring (see mentor instructions below).",
+  anchor:  "Right now you're playing the Anchor role: a calm recovery coach helping someone through repeated mistakes. Lead with reassurance, then one small next step.",
+  compass: "Right now you're playing the Compass role: help plan, prioritize or summarize progress concretely and briefly.",
+  echo:    "Right now you're playing the Echo role: this is a live spoken conversation. Keep replies short, natural to say out loud, no lists or markdown.",
+  pulse:   "Right now you're playing the Pulse role: answer quickly and directly, no preamble."
+};
+
+async function askBrain(turns, brain){
+  const preferred = brain.tier;
+  const fallback = preferred==='quick' ? 'default' : 'quick';
+  try{
+    setStatus('online · '+brain.name+' ('+brain.role+') thinking…');
+    const r = await sample(turns, {modelTier:preferred});
+    setStatus('online · memory synced');
+    return r.text;
+  }catch(e1){
+    if(e1.code==='rate_limited' || e1.code==='unavailable' || e1.code==='cancelled'){
+      try{
+        setStatus('online · '+brain.name+' busy, fallback engine…');
+        const r2 = await sample(turns, {modelTier:fallback});
+        setStatus('online · memory synced');
+        return r2.text;
+      }catch(e2){ setStatus('online · memory synced'); throw e2; }
+    }
+    setStatus('online · memory synced');
+    throw e1;
+  }
+}
+
+let wrongStreak=0;
+async function sendMessage(customText){
+  const ta=$('#chat-input');
+  const text=(customText!==undefined?customText:ta.value).trim();
+  if(!text) return;
+  if(customText===undefined){ ta.value=''; ta.style.height='auto'; }
+  pushMsg('user', text);
+  chatHistory.push({role:'user', content:text});
+  persistChat();
+  markActiveToday();
+
+  if(/human override/i.test(text)){
+    await triggerHumanOverride(text);
+    return;
+  }
+  pendingPatternNote = logExcuseAndBuildNote(text);
+  renderExcuseLog();
+  if(!sample){
+    pushBotStatic("I can't reach the thinking engine from this preview — open the published page to chat.");
+    pendingPatternNote=null;
+    return;
+  }
+  const brain = pickBrain(text);
+  const typing=document.createElement('div');
+  typing.className='typing'; typing.textContent=brain.name+' is thinking…';
+  log.appendChild(typing); scrollLog();
+  try{
+    const turns = chatHistory.slice(-8, -1).map(m=>({role:m.role, content:m.content}));
+    let ctx = buildContext(text);
+    ctx += "\n\n"+BRAIN_PERSONA_LINES[brain.id];
+    turns.push({role:'user', content: ctx});
+    const answer = await askBrain(turns, brain);
+    typing.remove();
+    pushMsg('bot', answer);
+    const bl=document.createElement('div'); bl.className='brainline';
+    bl.textContent='— '+brain.name+' · '+brain.role; log.appendChild(bl); scrollLog();
+    lastBrainUsed=brain;
+    chatHistory.push({role:'assistant', content:answer});
+    persistChat();
+    if(speakNextReply){
+      speakNextReply=false;
+      if(voiceCallActive){
+        $('#call-overlay').className='call-overlay show speaking';
+        $('#call-status').textContent='Speaking…'; $('#call-sub').textContent=answer.slice(0,140);
+        speak(answer, ()=>{ if(voiceCallActive && !callMuted) startCallListening(); });
+      } else {
+        speak(answer);
+      }
+    }
+  }catch(e){
+    typing.remove();
+    const msg = e.code==='not_granted' ? "I need your permission to think — try sending again."
+      : "Both brains are catching their breath — give it a moment and try again.";
+    pushBotStatic(msg);
+  }
+  pendingPatternNote=null;
+}
+$('#send-btn').addEventListener('click', ()=>sendMessage());
+$('#chat-input').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); } });
+$('#chat-input').addEventListener('input', function(){ this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,110)+'px'; });
+$('#clear-chat').addEventListener('click', ()=>{ chatHistory=[]; log.innerHTML=''; persistChat(); pushBotStatic("Cleared. Fresh start."); });
+
+// ---------- voice input (quick mic + full voice-call mode) ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognizer=null, listening=false;
+let speakNextReply=false; // true when the upcoming bot reply should be spoken aloud
+let recognizerMode='quick'; // 'quick' | 'call' | 'wake'
+let wakeWordOn=false, clapOn=false;
+if(SR){
+  recognizer=new SR(); recognizer.continuous=false; recognizer.interimResults=false; recognizer.lang='en-US';
+  recognizer.onresult=(e)=>{
+    const res=e.results[e.results.length-1];
+    const t=res[0].transcript;
+    if(recognizerMode==='wake'){
+      if(/\bnori\b/i.test(t)) openVoiceCall();
+      return;
+    }
+    if(voiceCallActive){ speakNextReply=true; $('#call-status').textContent='Thinking…'; $('#call-overlay').className='call-overlay show'; }
+    sendMessage(t);
+  };
+  recognizer.onend=()=>{
+    listening=false; $('#mic-btn').classList.remove('rec');
+    if(recognizerMode==='wake' && wakeWordOn && !voiceCallActive){ setTimeout(startWakeListening, 600); }
+  };
+  recognizer.onerror=()=>{
+    listening=false; $('#mic-btn').classList.remove('rec');
+    if(voiceCallActive){ $('#call-status').textContent="Didn't catch that"; $('#call-sub').textContent='Tap the mic isn\'t needed — just talk, or end the call.'; setTimeout(startCallListening, 1200); }
+    else if(recognizerMode==='wake' && wakeWordOn){ setTimeout(startWakeListening, 1200); }
+  };
+}
+function startWakeListening(){
+  if(!recognizer || !wakeWordOn || voiceCallActive || listening) return;
+  recognizerMode='wake';
+  recognizer.continuous=true;
+  try{ listening=true; recognizer.start(); }catch(e){}
+}
+$('#mic-btn').addEventListener('click', ()=>{
+  if(!recognizer){ pushBotStatic("Voice input isn't supported in this browser — try Chrome."); return; }
+  if(listening){ recognizer.stop(); return; }
+  recognizerMode='quick'; recognizer.continuous=false; listening=true; $('#mic-btn').classList.add('rec'); recognizer.start();
+});
+// ---------- homework photo (vision) ----------
+// Lumen reads carefully first; if it's busy/unavailable, Iris (a faster pass) picks it
+// up automatically — same two real engines as the text brains, just fed an image too.
+// A published page's network is blocked, so a true third-party call (Gemini or otherwise)
+// can't happen from here regardless — this is the honest two-tier equivalent.
+function checkPhotoCapability(){
+  if(sample && sample.limits){
+    sample.limits().then(caps=>{ if(caps && caps.images) $('#photo-btn').style.display='flex'; }).catch(()=>{});
+  }
+}
+$('#photo-btn').addEventListener('click', ()=>$('#photo-input').click());
+$('#photo-input').addEventListener('change', async ()=>{
+  const file = $('#photo-input').files[0]; if(!file) return;
+  $('#photo-input').value='';
+  const url = URL.createObjectURL(file);
+  const wrap=document.createElement('div'); wrap.className='msgrow user';
+  const img=document.createElement('img'); img.src=url; img.style.cssText='max-width:70%;border-radius:14px;border:1px solid var(--border);';
+  wrap.appendChild(img); log.appendChild(wrap); scrollLog();
+  markActiveToday();
+
+  const typing=document.createElement('div'); typing.className='typing'; typing.textContent='Lumen is reading…';
+  log.appendChild(typing); scrollLog();
+  const prompt = buildContext("Here's a photo of a homework problem.") + "\n\nRead what's in the image, identify the problem, and "+
+    (mentorOn ? "guide them through it step by step without just handing over the final answer." : "solve it clearly, showing your steps.");
+  try{
+    let r;
+    try{ r = await sample(prompt, {modelTier:'default', images:file}); }
+    catch(e1){
+      if(e1.code==='rate_limited'||e1.code==='unavailable'||e1.code==='cancelled'){
+        typing.textContent='Lumen is busy, Iris is picking it up…';
+        r = await sample(prompt, {modelTier:'quick', images:file});
+      } else throw e1;
+    }
+    typing.remove();
+    pushMsg('bot', r.text);
+    const bl=document.createElement('div'); bl.className='brainline'; bl.textContent='— Lumen/Iris · Vision'; log.appendChild(bl); scrollLog();
+    chatHistory.push({role:'user', content:'[photo of a homework problem]'});
+    chatHistory.push({role:'assistant', content:r.text});
+    persistChat();
+  }catch(e){
+    typing.remove();
+    const msg = e.code==='image_rejected' ? "That image didn't come through cleanly — try a clearer, closer photo."
+      : "Couldn't read that photo right now — try again in a moment.";
+    pushBotStatic(msg);
+  }
+});
+
+function speak(text, onDone){
+  try{
+    if(!('speechSynthesis' in window)){ if(onDone) onDone(); return; }
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text.slice(0,800));
+    u.onend=()=>{ if(onDone) onDone(); };
+    u.onerror=()=>{ if(onDone) onDone(); };
+    speechSynthesis.speak(u);
+  }catch(e){ if(onDone) onDone(); }
+}
+function speakIfAlarmVoice(text){ if(speakNextReply){ speakNextReply=false; speak(text); } }
+
+// ---------- voice call mode ----------
+function openVoiceCall(){
+  if(!recognizer){ pushBotStatic("Voice chat needs a browser with speech support — try Chrome."); return; }
+  recognizerMode='call';
+  try{ recognizer.stop(); }catch(e){}
+  voiceCallActive=true; callMuted=false;
+  $('#call-overlay').className='call-overlay show';
+  $('#call-mute-btn').classList.remove('muted'); $('#call-mute-btn').textContent='🎤';
+  $('#mode-voice-btn').classList.add('active'); $('#mode-text-btn').classList.remove('active');
+  setTimeout(startCallListening, 280);
+}
+function closeVoiceCall(){
+  voiceCallActive=false;
+  try{ recognizer.stop(); }catch(e){}
+  try{ speechSynthesis.cancel(); }catch(e){}
+  $('#call-overlay').className='call-overlay';
+  $('#mode-voice-btn').classList.remove('active'); $('#mode-text-btn').classList.add('active');
+  if(wakeWordOn) setTimeout(startWakeListening, 500);
+}
+function startCallListening(){
+  if(!voiceCallActive || callMuted) return;
+  recognizerMode='call'; recognizer.continuous=false;
+  $('#call-overlay').className='call-overlay show listening';
+  $('#call-status').textContent='Listening…';
+  $('#call-sub').textContent="Speak naturally — JARVIS answers out loud when you pause.";
+  try{ listening=true; recognizer.start(); }catch(e){}
+}
+$('#header-avatar').addEventListener('click', openVoiceCall);
+$('#talk-prompt').addEventListener('click', openVoiceCall);
+$('#mode-voice-btn').addEventListener('click', openVoiceCall);
+$('#mode-text-btn').addEventListener('click', ()=>{
+  $('#mode-text-btn').classList.add('active'); $('#mode-voice-btn').classList.remove('active');
+  $('#chat-input').focus();
+});
+$('#call-end-btn').addEventListener('click', closeVoiceCall);
+$('#call-mute-btn').addEventListener('click', ()=>{
+  callMuted=!callMuted;
+  $('#call-mute-btn').classList.toggle('muted', callMuted);
+  $('#call-mute-btn').textContent = callMuted ? '🔇' : '🎤';
+  if(callMuted){ try{ recognizer.stop(); }catch(e){} $('#call-status').textContent='Muted'; $('#call-overlay').className='call-overlay show'; }
+  else startCallListening();
+});
+
+// ---------- wake word ("Nori") ----------
+$('#wake-word-toggle').addEventListener('change', e=>{
+  wakeWordOn=e.target.checked;
+  updateWakeStatus();
+  if(wakeWordOn) startWakeListening();
+  else if(recognizerMode==='wake'){ try{ recognizer.stop(); }catch(err){} }
+});
+function updateWakeStatus(){
+  const parts=[];
+  if(wakeWordOn) parts.push('listening for "Nori"');
+  if(clapOn) parts.push('listening for 2 claps');
+  if(ambientOn) parts.push('noticing raised voice & sighs');
+  $('#wake-status').textContent = parts.length
+    ? parts.join(' · ')+' — mic is live in this tab.'
+    : 'Off — all three need mic access and only listen while this tab is open (no true background listening in a browser). Everything\'s analyzed locally on your device — no audio is ever recorded, sent anywhere, or stored. Volume and tone only, never words, unless a mode above is explicitly listening for speech.';
+}
+
+// ---------- shared mic pipeline: claps + ambient awareness ----------
+// One audio stream serves clap detection, loud-speech detection, and breath/sigh
+// detection. Everything below runs in your browser only — raw audio never leaves
+// the device, nothing is recorded, and only coarse volume/spectral shape is read,
+// never speech content, from this pipeline (voice chat/wake-word are separate and
+// use the browser's own speech-to-text, not this).
+let ambientOn=false;
+let clapCtx=null, clapStream=null, clapAnalyser=null, clapRaf=null, clapPeakTimes=[];
+let loudSince=0, breathSince=0, lastLoudNudge=0, lastBreathNudge=0;
+function spectralFlatness(data){
+  let logSum=0, sum=0, n=data.length;
+  for(let i=0;i<n;i++){ const v=Math.max(data[i],1); logSum+=Math.log(v); sum+=v; }
+  return Math.exp(logSum/n)/(sum/n); // 0..1, closer to 1 = flat/noise-like (breathy), lower = tonal (speech)
+}
+function ambientNudge(text){
+  pushBotStatic(text);
+  chatHistory.push({role:'assistant', content:text}); persistChat();
+}
+async function startAmbientPipeline(){
+  if(clapCtx) return; // already running, shared by whichever toggles are on
+  try{
+    clapStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    clapCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const src = clapCtx.createMediaStreamSource(clapStream);
+    clapAnalyser = clapCtx.createAnalyser(); clapAnalyser.fftSize=512;
+    src.connect(clapAnalyser);
+    const data = new Uint8Array(clapAnalyser.frequencyBinCount);
+    let lastPeak=0;
+    function loop(){
+      if(!clapOn && !ambientOn){ stopAmbientPipeline(); return; }
+      clapAnalyser.getByteFrequencyData(data);
+      let sum=0; for(let i=0;i<data.length;i++) sum+=data[i];
+      const level = sum/data.length;
+      const now=performance.now();
+
+      if(clapOn && level>62 && now-lastPeak>250){ // sharp full-spectrum transient = candidate clap
+        lastPeak=now;
+        clapPeakTimes.push(now);
+        clapPeakTimes = clapPeakTimes.filter(t=>now-t<1200);
+        if(clapPeakTimes.length>=2){ clapPeakTimes=[]; if(!voiceCallActive) openVoiceCall(); }
+      }
+
+      if(ambientOn){
+        // Loud / raised speaking: sustained high level for over a second, rate-limited
+        if(level>95){
+          if(!loudSince) loudSince=now;
+          if(now-loudSince>1400 && now-lastLoudNudge>150000){
+            lastLoudNudge=now; loudSince=0;
+            ambientNudge("Noticed things got loud just now — everything okay? Take a second before jumping back in if you need it.");
+          }
+        } else loudSince=0;
+
+        // Breath / sigh: moderate volume + flat, noise-like spectrum (no clear tonal speech), sustained
+        const flat = spectralFlatness(data);
+        if(level>12 && level<50 && flat>0.55){
+          if(!breathSince) breathSince=now;
+          if(now-breathSince>900 && now-lastBreathNudge>240000){
+            lastBreathNudge=now; breathSince=0;
+            ambientNudge("That sounded like a long breath out. If you're tired, a real break will probably help more than pushing through right now.");
+          }
+        } else breathSince=0;
+      }
+      clapRaf=requestAnimationFrame(loop);
+    }
+    loop();
+  }catch(e){
+    clapOn=false; ambientOn=false;
+    $('#clap-toggle').checked=false; $('#ambient-toggle').checked=false; updateWakeStatus();
+    pushBotStatic("Couldn't get mic access for that — check your browser's permission prompt.");
+  }
+}
+function stopAmbientPipeline(){
+  if(clapRaf) cancelAnimationFrame(clapRaf); clapRaf=null;
+  if(clapStream) clapStream.getTracks().forEach(t=>t.stop());
+  if(clapCtx) try{ clapCtx.close(); }catch(e){}
+  clapStream=null; clapCtx=null; clapAnalyser=null; clapPeakTimes=[]; loudSince=0; breathSince=0;
+}
+$('#clap-toggle').addEventListener('change', e=>{
+  clapOn=e.target.checked; updateWakeStatus();
+  if(clapOn||ambientOn) startAmbientPipeline(); else stopAmbientPipeline();
+});
+$('#ambient-toggle').addEventListener('change', e=>{
+  ambientOn=e.target.checked; updateWakeStatus();
+  if(clapOn||ambientOn) startAmbientPipeline(); else stopAmbientPipeline();
+});
+
+// ---------- recovery ----------
+function showRecovery(){
+  recoveryContextActive=true;
+  const slot=$('#recovery-slot');
+  if(slot.dataset.shown==='1') return;
+  slot.dataset.shown='1';
+  slot.innerHTML='';
+  const card=document.createElement('div'); card.className='recovery-card';
+  const img=document.createElement('img'); img.src=AVATAR_ENCOURAGE;
+  const txt=document.createElement('div'); txt.className='txt';
+  txt.innerHTML="<b>Rough patch — that's normal.</b>A few misses in a row just means it's time to slow down, not that you're bad at this.<br><span style='font-size:11px;'>What's going on?</span>";
+  const chipRow=document.createElement('div'); chipRow.className='row'; chipRow.style.marginTop='6px';
+  [['conceptual','Don\'t get it yet'],['rushed','Rushing'],['careless','Careless slips']].forEach(([kind,label])=>{
+    const c=document.createElement('button'); c.className='btn ghost small'; c.textContent=label;
+    c.addEventListener('click', ()=>{ tagMistake(kind,'practice',label); chipRow.remove(); });
+    chipRow.appendChild(c);
+  });
+  const btn=document.createElement('button'); btn.className='btn small'; btn.style.marginTop='8px'; btn.textContent="Talk it through";
+  btn.addEventListener('click', ()=>{
+    document.querySelector('[data-view=chat]').click();
+    setConvoMode('tutor');
+    sendMessage("I've been getting a few wrong in a row and I'm frustrated. Can we slow down and break this down into something easier first?");
+    slot.innerHTML=''; slot.dataset.shown='';
+  });
+  txt.appendChild(chipRow); txt.appendChild(btn);
+  card.appendChild(img); card.appendChild(txt);
+  slot.appendChild(card);
+}
+function clearRecovery(){ recoveryContextActive=false; $('#recovery-slot').innerHTML=''; $('#recovery-slot').dataset.shown=''; }
+
+// ---------- weak areas ----------
+function addWeakArea(topic){
+  if(weakAreas.some(w=>w.topic===topic)) return;
+  weakAreas.push({topic, addedAt:Date.now()});
+  weakAreas=weakAreas.slice(-12);
+  persistProfile(); renderWeakAreas();
+}
+function renderWeakAreas(){
+  const wrap=$('#weak-chips'); wrap.innerHTML='';
+  $('#weak-empty').style.display = weakAreas.length ? 'none':'block';
+  weakAreas.forEach((w,i)=>{
+    const chip=document.createElement('div'); chip.className='chip weak-chip';
+    const span=document.createElement('span'); span.textContent=w.topic;
+    const del=document.createElement('button'); del.textContent='✓';  del.title='Mark improved / remove';
+    del.addEventListener('click', ()=>{ weakAreas.splice(i,1); renderWeakAreas(); persistProfile(); });
+    chip.appendChild(span); chip.appendChild(del); wrap.appendChild(chip);
+  });
+}
+
+// ---------- weekly recap ----------
+$('#recap-btn').addEventListener('click', async ()=>{
+  if(!sample){ $('#recap-empty').textContent="Recap needs the thinking engine — open the published page."; return; }
+  $('#recap-btn').disabled=true; $('#recap-btn').textContent='Thinking…';
+  const facts = [
+    "Current streak: "+(progress.streak||0)+" days",
+    "Total focus minutes logged: "+(progress.totalMin||0),
+    "Calc drill problems solved: "+(drillStats.solved||0)+", best time "+(drillStats.best?fmtTime(drillStats.best):'n/a'),
+    "Flashcards: "+flashcards.length+" total, "+flashcards.filter(c=>(c.box||1)>=3).length+" mastered",
+    "Focus blocks completed: "+(blockState.completed||0)+", opened a distraction anyway: "+(blockState.broken||0),
+    weakAreas.length ? "Struggling with: "+weakAreas.map(w=>w.topic).join(', ') : "No flagged weak spots right now"
+  ].join('\n');
+  const prompt = "Write a short, warm, honest weekly recap (5-6 sentences max) for a student named "+(profile.name||'the user')+" based on this data:\n"+facts+"\nEnd with one specific, encouraging suggestion for what to focus on next. Plain text, no headers or bullet points.";
+  try{
+    const r = await sample(prompt, {modelTier:'default'});
+    recap={text:r.text, date:todayStr()};
+    persistProfile(); renderRecap();
+  }catch(e){
+    $('#recap-empty').textContent="Couldn't generate that right now — try again in a moment.";
+  }
+  $('#recap-btn').disabled=false; $('#recap-btn').textContent='Generate recap';
+});
+function renderRecap(){
+  if(recap.text){
+    $('#recap-text').style.display='block'; $('#recap-text').textContent=recap.text;
+    $('#recap-empty').textContent='Last generated '+(recap.date||'');
+  }
+}
+
+// ---------- exam prep ----------
+function renderExamPrep(){
+  const has = examPrep && examPrep.name;
+  $('#exam-setup').style.display = has ? 'none':'block';
+  $('#exam-active-card').style.display = has ? 'block':'none';
+  if(!has) return;
+  $('#exam-active-name').textContent = examPrep.name;
+  $('#exam-active-sub').textContent = examPrep.subject||'';
+  const days = Math.ceil((new Date(examPrep.date)-new Date())/86400000);
+  $('#exam-days').textContent = isNaN(days) ? '—' : Math.max(days,0);
+}
+$('#exam-save-btn').addEventListener('click', ()=>{
+  const name=$('#exam-name').value.trim(), subject=$('#exam-subject').value.trim(), date=$('#exam-date').value.trim();
+  if(!name||!date) return;
+  examPrep={name, subject, date}; persistProfile(); renderExamPrep();
+});
+$('#exam-clear-btn').addEventListener('click', ()=>{ examPrep={name:'',subject:'',date:''}; persistProfile(); renderExamPrep(); });
+$('#exam-plan-btn').addEventListener('click', async ()=>{
+  if(!sample) return;
+  $('#exam-plan-btn').disabled=true; $('#exam-plan-btn').textContent='Thinking…';
+  const days = Math.ceil((new Date(examPrep.date)-new Date())/86400000);
+  const prompt = "Build a short phased prep plan for a student's exam: \""+examPrep.name+"\" ("+(examPrep.subject||'general')+"), "+days+" days away. "+
+    (weakAreas.length ? "Known weak spots: "+weakAreas.map(w=>w.topic).join(', ')+". " : "")+
+    "Give 3-4 short phases (e.g. Review / Practice / Simulate / Rest) mapped loosely across the remaining days, plain text, no headers, under 120 words.";
+  try{
+    const r = await sample(prompt, {modelTier:'default'});
+    $('#exam-plan-text').style.display='block'; $('#exam-plan-text').textContent=r.text;
+  }catch(e){ $('#exam-plan-text').style.display='block'; $('#exam-plan-text').textContent="Couldn't generate that right now — try again shortly."; }
+  $('#exam-plan-btn').disabled=false; $('#exam-plan-btn').textContent='Generate prep plan';
+});
+
+// ---------- study planner ----------
+$('#plan-btn').addEventListener('click', async ()=>{
