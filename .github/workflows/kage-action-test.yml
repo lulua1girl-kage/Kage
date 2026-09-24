@@ -1,0 +1,12 @@
+name: KAGE action test
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: echo KAGE_ACTIONS_OK
