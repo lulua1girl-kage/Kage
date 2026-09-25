@@ -1,0 +1,69 @@
+name: KAGE APK v3
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: lulua1girl-kage/Nori-kage-
+          path: .nori-base
+          fetch-depth: 1
+      - name: Extract
+        run: |
+          set -e
+          unzip -q .nori-base/nori-v36_5-build-script-fixed.zip -d .nori-v36
+          PROJECT_DIR="$(find .nori-v36 -type d -name v364-connect -print -quit)"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Merge
+        run: |
+          set -e
+          python3 scripts/merge_kage.py
+          cd "$PROJECT_DIR"
+          node --check www/nori-jarvis-integration.js
+      - name: Install and sync
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+          npm install
+          npx cap sync android
+      - name: Build
+        run: |
+          set -e
+          curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          cd "$PROJECT_DIR/android"
+          /tmp/gradle-8.13/bin/gradle clean assembleDebug --no-daemon --stacktrace
+          APK="$(find app/build/outputs/apk -type f -name '*.apk' -print -quit)"
+          test -n "$APK"
+          cp "$APK" "$GITHUB_WORKSPACE/KAGE-Nori-merged-debug.apk"
+      - name: Verify
+        run: |
+          set -e
+          test -s KAGE-Nori-merged-debug.apk
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          "$APKSIGNER" verify --verbose KAGE-Nori-merged-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kage-nori-merged-apk
+          path: KAGE-Nori-merged-debug.apk
+          if-no-files-found: error
