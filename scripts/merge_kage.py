@@ -73,10 +73,10 @@ repls={
 "const persistBlock = debounced(async ()=>{ if(blockDocRef) try{ await blockDocRef.set(blockState); }catch(e){} }, 300);":"const persistBlock = debounced(async ()=>{window.__KAGE_JARVIS_BRIDGE?.localSave('blockState',blockState);if(blockDocRef)try{await blockDocRef.set(blockState)}catch(e){}},300);",
 "const persistAlarms = debounced(async ()=>{ if(alarmDocRef) try{ await alarmDocRef.set({alarms}); }catch(e){} }, 300);":"const persistAlarms = debounced(async ()=>{window.__KAGE_JARVIS_BRIDGE?.localSave('alarms',alarms);if(alarmDocRef)try{await alarmDocRef.set({alarms})}catch(e){}},300);"
 }
-for(const [a,b] of Object.entries(repls)){
-  if(!s.includes(a)) throw new Error("persist function missing")
-  s=s.replace(a,b,1)
-}
+for a,b in repls.items():
+    if a not in s:
+        raise SystemExit("persist function missing")
+    s=s.replace(a,b,1)
 s=s.replace("setStatus('online · memory synced');","setStatus(sample?'online · Nori Brain connected':'local mode · sign in for AI');")
 s=s.replace("setStatus(sample ? 'online · memory local to this device' : 'preview mode');","setStatus(sample?'online · Nori Brain connected':'local mode · sign in for AI');")
 jarvis.write_text(s,encoding="utf-8")
