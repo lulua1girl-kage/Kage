@@ -59,6 +59,69 @@ jobs:
           npm install
           npx cap sync android
 
+      - name: Repair V36.5 Android source compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("android/app/src/main/java")
+          def edit(rel, old, new):
+              p = root / rel
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f"Expected source pattern missing: {rel}")
+              p.write_text(s.replace(old, new, 1))
+
+          edit("com/nori/jarvis/NoriKnowledgePlugin.java",
+               "import com.getcapacitor.annotation.CapacitorPlugin;",
+               "import com.getcapacitor.annotation.CapacitorPlugin;\\nimport com.getcapacitor.annotation.ActivityCallback;\\nimport com.nori.jarvis.nori.identity.NoriSessionAuthority;")
+          edit("com/nori/jarvis/NoriKnowledgePlugin.java",
+               "import com.nori.jarvis.nori.identity.NoriUserIdentity;",
+               "import com.nori.jarvis.nori.identity.NoriUserIdentity;\\nimport com.getcapacitor.ActivityResult;")
+          edit("com/nori/jarvis/visual/NoriVisualPlugin.java",
+               "import com.getcapacitor.annotation.*;",
+               "import com.getcapacitor.annotation.*;\\nimport com.getcapacitor.ActivityResult;")
+          edit("com/nori/jarvis/visual/NoriExamIntegrityPlugin.java",
+               "import android.app.*;import android.content.*;import com.getcapacitor.*;import com.getcapacitor.annotation.*;",
+               "import android.app.*;import android.content.*;import com.getcapacitor.*;import com.getcapacitor.annotation.*;import com.getcapacitor.ActivityResult;")
+          edit("com/nori/jarvis/NoriBiometricPlugin.java",
+               "import android.app.BiometricPrompt;",
+               "import android.hardware.biometrics.BiometricPrompt;")
+          edit("com/nori/jarvis/nori/NoriNativeCore.java",
+               "import com.nori.jarvis.nori.data.DataRepository;",
+               "import com.nori.jarvis.nori.data.DataRepository;\\nimport com.nori.jarvis.nori.brain.NoriBrain;")
+          edit("com/nori/jarvis/nori/NoriNativeCore.java",
+               "private final brain.NoriBrain brain;",
+               "private final NoriBrain brain;")
+          edit("com/nori/jarvis/nori/NoriNativeCore.java",
+               "this.brain = new brain.NoriBrain(repository);",
+               "this.brain = new NoriBrain(repository);")
+          edit("com/nori/jarvis/nori/NoriNativeCore.java",
+               "public brain.NoriBrain getBrain() {",
+               "public NoriBrain getBrain() {")
+          edit("com/nori/jarvis/NoriMetaBrainPlugin.java",
+               "import com.nori.jarvis.nori.meta.NoriMetaBrainEngine;",
+               "import com.nori.jarvis.nori.meta.NoriMetaBrainEngine;\\nimport com.nori.jarvis.nori.meta.NoriMetaBrainOrchestrator;")
+          edit("com/nori/jarvis/nori/data/NoriDatabase.java",
+               "import android.database.sqlite.SQLiteDatabase;",
+               "import android.database.Cursor;\\nimport android.database.sqlite.SQLiteDatabase;")
+          edit("com/nori/jarvis/nori/data/NoriDatabase.java",
+               "    @Override\\n    public void onConfigure(SQLiteDatabase db) {",
+               "    public Cursor rawQuery(String sql, String[] args) { return getReadableDatabase().rawQuery(sql, args); }\\n\\n    @Override\\n    public void onConfigure(SQLiteDatabase db) {")
+          edit("com/nori/jarvis/nori/ui/NoriTheme.java",
+               "public static TextView metric(Context c, String value, String label) {",
+               "public static LinearLayout metric(Context c, String value, String label) {")
+          edit("com/nori/jarvis/nori/android/alarm/NoriAlarmReceiver.java",
+               "Notification.Builder builder = new NotificationCompat.Builder(context, NoriNotificationService.CHANNEL_REMINDERS).setSmallIcon(android.R.drawable.ic_lock_idle_alarm);",
+               "Notification.Builder builder = new Notification.Builder(context, NoriNotificationService.CHANNEL_REMINDERS).setSmallIcon(android.R.drawable.ic_lock_idle_alarm);")
+          edit("com/nori/jarvis/nori/presence/NoriInteractiveCircleView.java",
+               "c.drawText(state.name,cx,cy+r*2.65f,p);",
+               "c.drawText(state.name(),cx,cy+r*2.65f,p);")
+          PY
+          echo "V36.5 Android source compatibility repairs applied."
+
       - name: Build APK
         shell: bash
         run: |
