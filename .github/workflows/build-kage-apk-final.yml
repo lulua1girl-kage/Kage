@@ -55,6 +55,7 @@ jobs:
           cd "$PROJECT_DIR"
           test -f package.json
           test -d android
+          npm pkg set dependencies.@capacitor-community/speech-recognition=7.0.1
           npm install
           npx cap sync android
 
