@@ -87,8 +87,7 @@ jobs:
           add_import("com/nori/jarvis/visual/NoriVisualPlugin.java","import com.getcapacitor.ActivityResult;")
           add_import("com/nori/jarvis/visual/NoriExamIntegrityPlugin.java","import com.getcapacitor.ActivityResult;")
           replace("com/nori/jarvis/NoriBiometricPlugin.java","import android.app.BiometricPrompt;","import android.hardware.biometrics.BiometricPrompt;")
-          replace("com/nori/jarvis/nori/NoriNativeCore.java","import com.nori.jarvis.nori.data.DataRepository;","import com.nori.jarvis.nori.data.DataRepository;
-import com.nori.jarvis.nori.brain.NoriBrain;")
+          replace("com/nori/jarvis/nori/NoriNativeCore.java","import com.nori.jarvis.nori.data.DataRepository;","import com.nori.jarvis.nori.data.DataRepository;"+chr(10)+"import com.nori.jarvis.nori.brain.NoriBrain;")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","private final brain.NoriBrain brain;","private final NoriBrain brain;")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","this.brain = new brain.NoriBrain(repository);","this.brain = new NoriBrain(repository);")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","public brain.NoriBrain getBrain() {","public NoriBrain getBrain() {")
