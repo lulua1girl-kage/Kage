@@ -47,8 +47,6 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: .nori-v36/**/package-lock.json
 
       - name: Prepare existing Nori app
         shell: bash
