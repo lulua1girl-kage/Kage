@@ -80,7 +80,7 @@ jobs:
                   # Put after package line and existing imports.
                   pos=1
                   while pos<len(lines) and (lines[pos].startswith("import ") or lines[pos].strip()==""): pos+=1
-                  lines.insert(pos, imp+"\\n")
+                  lines.insert(pos, imp+"\n")
                   f.write_text("".join(lines))
           add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import com.nori.jarvis.nori.identity.NoriSessionAuthority;")
           add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import com.getcapacitor.ActivityResult;")
@@ -93,7 +93,7 @@ jobs:
           replace("com/nori/jarvis/nori/NoriNativeCore.java","public brain.NoriBrain getBrain() {","public NoriBrain getBrain() {")
           add_import("com/nori/jarvis/NoriMetaBrainPlugin.java","import com.nori.jarvis.nori.meta.NoriMetaBrainOrchestrator;")
           add_import("com/nori/jarvis/nori/data/NoriDatabase.java","import android.database.Cursor;")
-          replace("com/nori/jarvis/nori/data/NoriDatabase.java","    @Override\\n    public void onConfigure(SQLiteDatabase db) {","    public Cursor rawQuery(String sql, String[] args) { return getReadableDatabase().rawQuery(sql, args); }\\n\\n    @Override\\n    public void onConfigure(SQLiteDatabase db) {")
+          replace("com/nori/jarvis/nori/data/NoriDatabase.java","    @Override\n    public void onConfigure(SQLiteDatabase db) {","    public Cursor rawQuery(String sql, String[] args) { return getReadableDatabase().rawQuery(sql, args); }\\n\\n    @Override\\n    public void onConfigure(SQLiteDatabase db) {")
           replace("com/nori/jarvis/nori/ui/NoriTheme.java","public static TextView metric(Context c, String value, String label) {","public static LinearLayout metric(Context c, String value, String label) {")
           replace("com/nori/jarvis/nori/presence/NoriInteractiveCircleView.java","c.drawText(state.name,cx,cy+r*2.65f,p);","c.drawText(state.name(),cx,cy+r*2.65f,p);")
           print("Compatibility repairs applied.")
