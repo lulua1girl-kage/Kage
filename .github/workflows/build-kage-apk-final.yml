@@ -83,9 +83,9 @@ jobs:
                   lines.insert(pos, imp+"\n")
                   f.write_text("".join(lines))
           add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import com.nori.jarvis.nori.identity.NoriSessionAuthority;")
-          add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import com.getcapacitor.ActivityResult;")
-          add_import("com/nori/jarvis/visual/NoriVisualPlugin.java","import com.getcapacitor.ActivityResult;")
-          add_import("com/nori/jarvis/visual/NoriExamIntegrityPlugin.java","import com.getcapacitor.ActivityResult;")
+          add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import androidx.activity.result.ActivityResult;")
+          add_import("com/nori/jarvis/visual/NoriVisualPlugin.java","import androidx.activity.result.ActivityResult;")
+          add_import("com/nori/jarvis/visual/NoriExamIntegrityPlugin.java","import androidx.activity.result.ActivityResult;")
           replace("com/nori/jarvis/NoriBiometricPlugin.java","import android.app.BiometricPrompt;","import android.hardware.biometrics.BiometricPrompt;")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","import com.nori.jarvis.nori.data.DataRepository;","import com.nori.jarvis.nori.data.DataRepository;"+chr(10)+"import com.nori.jarvis.nori.brain.NoriBrain;")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","private final brain.NoriBrain brain;","private final NoriBrain brain;")
@@ -100,6 +100,8 @@ jobs:
               db_file.write_text(db_text)
           replace("com/nori/jarvis/nori/ui/NoriTheme.java","public static TextView metric(Context c, String value, String label) {","public static LinearLayout metric(Context c, String value, String label) {")
           replace("com/nori/jarvis/nori/presence/NoriInteractiveCircleView.java","c.drawText(state.name,cx,cy+r*2.65f,p);","c.drawText(state.name(),cx,cy+r*2.65f,p);")
+          replace("com/nori/jarvis/nori/android/alarm/NoriAlarmReceiver.java","import androidx.core.app.NotificationCompat;","")
+          replace("com/nori/jarvis/nori/android/alarm/NoriAlarmReceiver.java","Notification.Builder builder = new NotificationCompat.Builder(context, NoriNotificationService.CHANNEL_REMINDERS).setSmallIcon(android.R.drawable.ic_lock_idle_alarm);","Notification.Builder builder = new Notification.Builder(context, NoriNotificationService.CHANNEL_REMINDERS).setSmallIcon(android.R.drawable.ic_lock_idle_alarm);")
           print("Compatibility repairs applied.")
           PY
 
