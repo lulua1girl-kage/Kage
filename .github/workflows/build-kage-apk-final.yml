@@ -75,17 +75,17 @@ jobs:
               f=p(rel); s=f.read_text()
               if imp not in s:
                   lines=s.splitlines(True)
-                  i=0
-                  while i<len(lines) and (lines[i].startswith("package ") or lines[i].strip()=="" or lines[i].startswith("import ")): i+=1
-                  # Put after package line and existing imports.
                   pos=1
                   while pos<len(lines) and (lines[pos].startswith("import ") or lines[pos].strip()==""): pos+=1
                   lines.insert(pos, imp+"\n")
                   f.write_text("".join(lines))
           add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import com.nori.jarvis.nori.identity.NoriSessionAuthority;")
           add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import androidx.activity.result.ActivityResult;")
+          add_import("com/nori/jarvis/NoriKnowledgePlugin.java","import com.getcapacitor.annotation.ActivityCallback;")
           add_import("com/nori/jarvis/visual/NoriVisualPlugin.java","import androidx.activity.result.ActivityResult;")
+          add_import("com/nori/jarvis/visual/NoriVisualPlugin.java","import com.getcapacitor.annotation.ActivityCallback;")
           add_import("com/nori/jarvis/visual/NoriExamIntegrityPlugin.java","import androidx.activity.result.ActivityResult;")
+          add_import("com/nori/jarvis/visual/NoriExamIntegrityPlugin.java","import com.getcapacitor.annotation.ActivityCallback;")
           replace("com/nori/jarvis/NoriBiometricPlugin.java","import android.app.BiometricPrompt;","import android.hardware.biometrics.BiometricPrompt;")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","import com.nori.jarvis.nori.data.DataRepository;","import com.nori.jarvis.nori.data.DataRepository;"+chr(10)+"import com.nori.jarvis.nori.brain.NoriBrain;")
           replace("com/nori/jarvis/nori/NoriNativeCore.java","private final brain.NoriBrain brain;","private final NoriBrain brain;")
@@ -93,11 +93,10 @@ jobs:
           replace("com/nori/jarvis/nori/NoriNativeCore.java","public brain.NoriBrain getBrain() {","public NoriBrain getBrain() {")
           add_import("com/nori/jarvis/NoriMetaBrainPlugin.java","import com.nori.jarvis.nori.meta.NoriMetaBrainOrchestrator;")
           add_import("com/nori/jarvis/nori/data/NoriDatabase.java","import android.database.Cursor;")
-          db_file = p("com/nori/jarvis/nori/data/NoriDatabase.java")
-          db_text = db_file.read_text()
+          db_file=p("com/nori/jarvis/nori/data/NoriDatabase.java")
+          db_text=db_file.read_text()
           if "rawQuery(String sql, String[] args)" not in db_text:
-              db_text = db_text.rsplit("}", 1)[0] + chr(10) + "    public Cursor rawQuery(String sql, String[] args) { return getReadableDatabase().rawQuery(sql, args); }" + chr(10) + "}" + chr(10)
-              db_file.write_text(db_text)
+              db_file.write_text(db_text.rsplit("}",1)[0]+chr(10)+"    public Cursor rawQuery(String sql, String[] args) { return getReadableDatabase().rawQuery(sql, args); }"+chr(10)+"}"+chr(10))
           replace("com/nori/jarvis/nori/ui/NoriTheme.java","public static TextView metric(Context c, String value, String label) {","public static LinearLayout metric(Context c, String value, String label) {")
           replace("com/nori/jarvis/nori/presence/NoriInteractiveCircleView.java","c.drawText(state.name,cx,cy+r*2.65f,p);","c.drawText(state.name(),cx,cy+r*2.65f,p);")
           replace("com/nori/jarvis/nori/android/alarm/NoriAlarmReceiver.java","import androidx.core.app.NotificationCompat;","")
