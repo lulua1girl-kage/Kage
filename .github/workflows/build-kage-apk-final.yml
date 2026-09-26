@@ -59,6 +59,32 @@ jobs:
           npm install
           npx cap sync android
 
+      - name: Configure Android 13 compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/android"
+          python3 - <<'PY'
+          from pathlib import Path
+          for f in Path(".").rglob("*.gradle"):
+              s=f.read_text()
+              s=s.replace("targetSdkVersion 35", "targetSdkVersion 33")
+              s=s.replace("targetSdkVersion 34", "targetSdkVersion 33")
+              s=s.replace("targetSdkVersion = 35", "targetSdkVersion = 33")
+              s=s.replace("targetSdkVersion = 34", "targetSdkVersion = 33")
+              s=s.replace("targetSdk = 35", "targetSdk = 33")
+              s=s.replace("targetSdk = 34", "targetSdk = 33")
+              f.write_text(s)
+          for f in Path(".").rglob("*.gradle.kts"):
+              s=f.read_text()
+              s=s.replace("targetSdkVersion = 35", "targetSdkVersion = 33")
+              s=s.replace("targetSdkVersion = 34", "targetSdkVersion = 33")
+              s=s.replace("targetSdk = 35", "targetSdk = 33")
+              s=s.replace("targetSdk = 34", "targetSdk = 33")
+              f.write_text(s)
+          print("Android target SDK configured for API 33.")
+          PY
+
       - name: Repair V36.5 Android source compatibility
         shell: bash
         run: |
